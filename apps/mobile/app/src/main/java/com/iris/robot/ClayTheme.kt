@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -27,6 +28,7 @@ object Clay {
     val Honey = Color(0xFFF4B23E)
     val Sky = Color(0xFF8EC5DD)
     val Tomato = Color(0xFFE4553F)
+    val Field = Color(0xFFE5EFE9)
 }
 
 @Composable fun IrisTheme(content: @Composable () -> Unit) {
@@ -40,25 +42,28 @@ object Clay {
             surfaceVariant = Clay.MistDeep, onSurfaceVariant = Clay.Soft,
             error = Clay.Tomato, onError = Color.White, outline = Clay.Soft,
         ),
-        shapes = Shapes(small = RoundedCornerShape(16.dp), medium = RoundedCornerShape(24.dp), large = RoundedCornerShape(32.dp)),
+        shapes = Shapes(small = RoundedCornerShape(12.dp), medium = RoundedCornerShape(20.dp), large = RoundedCornerShape(28.dp)),
         typography = Typography(
-            headlineLarge = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.ExtraBold, fontSize = 32.sp, color = Clay.Pine),
-            titleLarge = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = Clay.Pine),
+            headlineLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 30.sp, lineHeight = 36.sp, letterSpacing = (-.7).sp),
+            headlineMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 33.sp, letterSpacing = (-.5).sp),
+            titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 28.sp),
+            titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp),
+            bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, lineHeight = 24.sp),
+            bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, lineHeight = 21.sp),
+            bodySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, lineHeight = 18.sp),
+            labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, lineHeight = 20.sp),
+            labelMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp),
         ),
         content = content,
     )
 }
 
 /** Soft cast shadow, lit upper edge, and shaded lower edge form a raised clay slab. */
-fun Modifier.clay(tone: Color = Clay.Surface, radius: Int = 28): Modifier {
+fun Modifier.clay(tone: Color = Clay.Surface, radius: Int = 24): Modifier {
     val shape = RoundedCornerShape(radius.dp)
-    return shadow(12.dp, shape, ambientColor = Clay.Pine.copy(alpha = .16f), spotColor = Clay.Pine.copy(alpha = .22f))
-        .background(Brush.linearGradient(listOf(lerp(tone, Color.White, .35f), tone, tone, lerp(tone, Clay.Pine, .08f))), shape)
-        .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = .95f), tone, Clay.Pine.copy(alpha = .08f))), shape)
-}
-
-@Composable fun ClayCard(modifier: Modifier = Modifier, tone: Color = Clay.Surface, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.clay(tone).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
+    return shadow(7.dp, shape, ambientColor = Clay.Pine.copy(alpha = .07f), spotColor = Clay.Pine.copy(alpha = .12f))
+        .background(Brush.linearGradient(listOf(lerp(tone, Color.White, .18f), tone, lerp(tone, Clay.Pine, .035f))), shape)
+        .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = .8f), tone, Clay.Pine.copy(alpha = .05f))), shape)
 }
 
 @Composable fun ClayButton(
@@ -69,8 +74,8 @@ fun Modifier.clay(tone: Color = Clay.Surface, radius: Int = 28): Modifier {
     content: @Composable RowScope.() -> Unit,
 ) {
     Button(onClick = onClick, enabled = enabled,
-        modifier = modifier.clay(if (enabled) tone else Clay.MistDeep, 24),
+        modifier = modifier.defaultMinSize(minHeight = 56.dp).clay(if (enabled) tone else Clay.MistDeep, 20),
         colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, disabledContainerColor = Color.Transparent,
             contentColor = if (tone == Clay.Teal || tone == Clay.Tomato) Color.White else Clay.Pine),
-        shape = RoundedCornerShape(24.dp), contentPadding = PaddingValues(horizontal = 22.dp, vertical = 16.dp), content = content)
+        shape = RoundedCornerShape(20.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 15.dp), content = content)
 }

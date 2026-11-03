@@ -12,7 +12,7 @@
         <intent><action android:name="android.speech.RecognitionService" /></intent>
         <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
     </queries>
-    <application android:label="IRIS Robot" android:theme="@android:style/Theme.Material.NoActionBar" android:icon="@drawable/ic_iris"
+    <application android:label="IRIS" android:theme="@android:style/Theme.Material.NoActionBar" android:icon="@drawable/ic_iris"
         android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="true" android:supportsRtl="true">
         <!-- Fixed robot mount: preserve camera and calibration orientation (mobile.md M1). -->
