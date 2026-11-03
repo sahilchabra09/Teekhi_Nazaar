@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -42,8 +44,10 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.light(0xFFDCEBE4.toInt(), 0xFFDCEBE4.toInt()),
+            navigationBarStyle = SystemBarStyle.light(0xFFDCEBE4.toInt(), 0xFFDCEBE4.toInt()))
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF8CE8D4), background = Color(0xFF091416), surface = Color(0xFF142427))) {
+            IrisTheme {
                 val state by model.state.collectAsStateWithLifecycle()
                 LaunchedEffect(state.running) {
                     if (state.running) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -53,14 +57,19 @@ class MainActivity : ComponentActivity() {
                     if (state.running) RobotScreen(state, model)
                     else Column(Modifier.safeDrawingPadding().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column { Text("IRIS", fontSize = 30.sp, fontWeight = FontWeight.Bold); Text("A voice. A presence.", color = Color(0xFF9BB6B5)) }
+                            Column { Text("IRIS", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold); Text("A voice. A presence.", color = Clay.Soft) }
+                            Box(Modifier.size(48.dp).clay(Clay.Honey, 24), contentAlignment = Alignment.Center) {
+                                Box(Modifier.size(24.dp).clip(RoundedCornerShape(20.dp)).background(Clay.Teal), contentAlignment = Alignment.Center) {
+                                    Box(Modifier.size(10.dp).clip(RoundedCornerShape(10.dp)).background(Clay.Pine))
+                                }
+                            }
                         }
                         state.error?.let { message ->
-                            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF472C26))) {
+                            Card(colors = CardDefaults.cardColors(containerColor = Clay.Tomato.copy(alpha = .15f))) {
                                 Column(Modifier.padding(12.dp)) { Text(message); TextButton(onClick = model::clearError) { Text("Dismiss") } }
                             }
                         }
-                        Setup(model.initialSettings, ::start)
+                        ClayCard(Modifier.fillMaxWidth()) { Setup(model.initialSettings, ::start) }
                     }
                 }
             }
@@ -83,8 +92,8 @@ class MainActivity : ComponentActivity() {
     var username by remember(initial) { mutableStateOf(initial.brokerUser) }
     var password by remember(initial) { mutableStateOf(initial.brokerPassword) }
     var http by remember(initial) { mutableStateOf(initial.allowLocalSessionHttp) }
-    Text("Put IRIS on the robot", fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
-    Text("Connect the phone and laptop to the same hotspot. Enter the laptop’s address below.", color = Color(0xFFB4C7C5))
+    Text("Your presence, anywhere.", fontSize = 27.sp, fontWeight = FontWeight.Bold)
+    Text("Connect your phone and laptop to the same hotspot, then start a conversation.", color = Clay.Soft)
     OutlinedTextField(hub, { hub = it }, label = { Text("Hub address") }, placeholder = { Text("192.168.1.10:3000") },
         singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
     Toggle("Connect ESP robot controller", robot) { robot = it }
@@ -95,12 +104,12 @@ class MainActivity : ComponentActivity() {
         OutlinedTextField(username, { username = it }, label = { Text("Broker username (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Secret("Broker password (optional)", password) { password = it }
         Toggle("Allow session HTTP on a private LAN", http) { http = it }
-        if (http) Text("Bench testing only: your token travels without encryption. Use HTTPS for a protected deployment.", color = Color(0xFFFFC68D), fontSize = 13.sp)
+        if (http) Text("Bench testing only: your token travels without encryption. Use HTTPS for a protected deployment.", color = Clay.Soft, fontSize = 13.sp)
         Text("Mount upright: phone top up, screen facing the robot’s forward direction. Driving requires calibration, live ESP status, and an authorized backend session.", fontSize = 14.sp)
     }
-    Button(onClick = { start(RobotSettings(hub, robot, broker, esp, username, password, token, http)) },
+    ClayButton(onClick = { start(RobotSettings(hub, robot, broker, esp, username, password, token, http)) },
         enabled = hub.isNotBlank(), modifier = Modifier.fillMaxWidth().height(64.dp)) { Text("Start IRIS", fontSize = 23.sp) }
-    Text("Camera and microphone are active during the session. IRIS stops when this app becomes inactive.", fontSize = 13.sp, color = Color(0xFF9BB6B5))
+    Text("Camera and microphone are active during the session. IRIS stops when this app becomes inactive.", fontSize = 13.sp, color = Clay.Soft)
 }
 
 @Composable private fun Secret(label: String, value: String, change: (String) -> Unit) {
@@ -119,16 +128,16 @@ class MainActivity : ComponentActivity() {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("IRIS", fontWeight = FontWeight.Bold, fontSize = 20.sp)
             Spacer(Modifier.weight(1f))
-            if (state.robot != null) Button(onClick = model::stopRobot,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFAC333A))) { Text("STOP", color = Color.White) }
+            if (state.robot != null) ClayButton(onClick = model::stopRobot, tone = Clay.Tomato) { Text("STOP") }
             TextButton(onClick = { controls = true }) { Text("Controls") }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(Modifier.fillMaxWidth().clay(radius = 20).padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             StatusDot("Hub", state.hub)
             StatusDot("Frontend", state.web)
             StatusDot("Camera", state.frontendVideoLive)
         }
-        Box(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.Black)) {
+        Box(Modifier.weight(1f).fillMaxWidth().clay(radius = 32).padding(10.dp)) {
+          Box(Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).background(Clay.Pine)) {
             val track = state.remoteTrack
             val egl = state.eglContext
             if (track != null && egl != null) key(track) {
@@ -143,27 +152,28 @@ class MainActivity : ComponentActivity() {
             if (!state.frontendVideoLive) {
                 val (title, hint) = when {
                     !state.hub -> "Connecting to hub" to "Check the laptop address and hotspot connection."
-                    !state.web -> "Waiting for frontend" to "Open the robot viewer on the laptop and click Connect."
+                    !state.web -> "Waiting for your laptop" to "Open the IRIS console with the same account and click Connect phone."
                     state.video == "fallback" -> "Frontend camera needs WebRTC" to "Open Controls and retry WebRTC. Turn off JPEG and Android STT fallback to receive the frontend camera."
                     else -> "Waiting for frontend camera" to "Allow camera access on the laptop and keep Send frontend camera to phone enabled."
                 }
-                Column(Modifier.fillMaxSize().background(Color(0xFF102427)).padding(24.dp),
+                Column(Modifier.fillMaxSize().background(Clay.MistDeep).padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     Text(title, fontSize = 25.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(12.dp))
-                    Text(hint, fontSize = 17.sp, color = Color(0xFFB4C7C5), textAlign = TextAlign.Center)
+                    Text(hint, fontSize = 17.sp, color = Clay.Soft, textAlign = TextAlign.Center)
                 }
             }
+          }
         }
         Text(state.caption, fontSize = 25.sp, lineHeight = 31.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
             fontWeight = FontWeight.Medium, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp))
         Text(if (state.speaking) "Speaking · microphone paused" else state.listening,
-            color = if (state.activeSpeech) Color(0xFFFFCE84) else Color(0xFF8CE8D4), fontSize = 15.sp,
+            color = if (state.activeSpeech) Clay.Teal else Clay.Soft, fontSize = 15.sp,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         if (state.error != null) TextButton(onClick = { controls = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Connection or session notice · open Controls", color = Color(0xFFFFC68D))
+            Text("Connection or session notice · open Controls", color = Clay.Tomato)
         }
-        Button(onClick = model::tap, enabled = !state.speaking && state.sttReady,
+        ClayButton(onClick = model::tap, enabled = !state.speaking && state.sttReady, tone = Clay.Honey,
             modifier = Modifier.fillMaxWidth().height(58.dp)) {
             Text(if (state.activeSpeech) "Tap to send" else "Tap to talk", fontSize = 22.sp)
         }
@@ -174,7 +184,7 @@ class MainActivity : ComponentActivity() {
             Text("Session controls", fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
             Text("Hub: ${state.hubLabel} · WebRTC: ${state.video}")
             state.error?.let { message ->
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF472C26))) {
+                Card(colors = CardDefaults.cardColors(containerColor = Clay.Tomato.copy(alpha = .15f))) {
                     Column(Modifier.padding(12.dp)) { Text(message); TextButton(onClick = model::clearError) { Text("Dismiss") } }
                 }
             }
@@ -184,7 +194,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 @Composable private fun SessionControls(state: RobotUiState, model: RobotViewModel) {
-    if (state.video == "fallback") Text("JPEG video · ${if (state.androidStt) "tap for Android STT" else "audio clips still upload"}", color = Color(0xFFFFC68D))
+    if (state.video == "fallback") Text("JPEG video · ${if (state.androidStt) "tap for Android STT" else "audio clips still upload"}", color = Clay.Soft)
     Toggle("JPEG fallback video", state.jpeg, !state.speaking && state.sttReady) { model.modes(it, state.androidStt) }
     Toggle("Android STT fallback", state.androidStt, !state.speaking && state.sttReady) { model.modes(state.jpeg, it) }
     if (state.androidStt) Text("Uses Android’s recognition service. Video uses JPEG while this mode owns the microphone.", fontSize = 13.sp)
@@ -199,14 +209,14 @@ class MainActivity : ComponentActivity() {
             OutlinedButton(onClick = model::fetchSession, Modifier.weight(1f)) { Text("Fetch session") }
         }
         Button(onClick = model::enable, enabled = !state.enabled, modifier = Modifier.fillMaxWidth()) { Text("Enable driving") }
-        Button(onClick = model::stopRobot, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFAC333A)), modifier = Modifier.fillMaxWidth().height(64.dp)) {
+        ClayButton(onClick = model::stopRobot, tone = Clay.Tomato, modifier = Modifier.fillMaxWidth().height(64.dp)) {
             Text("STOP ROBOT", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 @Composable private fun StatusDot(label: String, active: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.size(8.dp).clip(RoundedCornerShape(8.dp)).background(if (active) Color(0xFF8CE8D4) else Color(0xFF647773)))
+        Box(Modifier.size(8.dp).clip(RoundedCornerShape(8.dp)).background(if (active) Clay.Teal else Clay.Soft.copy(alpha = .45f)))
         Text(label, fontSize = 13.sp)
     }
 }
