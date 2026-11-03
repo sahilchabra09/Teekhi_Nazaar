@@ -11,6 +11,8 @@ import { talkRoutes } from "./talk/routes";
 /** Phone pairing, media relay (/ws), auth and /api/mobile/* (docs/mobile.md). */
 const gateway = createRobotGateway({
   origin: ENV.CORS_ORIGIN,
+  authBaseUrl: ENV.BETTER_AUTH_URL,
+  googleEnabled: !!ENV.GOOGLE_CLIENT_ID && !!ENV.GOOGLE_CLIENT_SECRET,
   authHandler: (request) => auth.handler(request),
   resolve: (headers) => auth.api.getSession({ headers, query: { disableCookieCache: true, disableRefresh: true } }),
 });

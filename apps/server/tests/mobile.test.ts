@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createRobotGateway } from "../src/mobile/gateway";
 import { Pairing, type AccountSession } from "../src/mobile/pairing";
+import { MobileOAuth, pkceChallenge } from "../src/mobile/oauth";
 
 const origin = "http://localhost:3001";
 const account = (id: string): AccountSession => ({ user: { id, email: `${id}@example.invalid`, name: id }, session: { id: `session-${id}`, expiresAt: new Date(Date.now() + 3_600_000) } });
@@ -11,22 +12,46 @@ async function until(check: () => boolean) {
   const end = Date.now() + 2000;
   while (!check()) { if (Date.now() > end) throw new Error("Timed out waiting for relay"); await Bun.sleep(5); }
 }
-function fixture() {
+function fixture(googleEnabled = true) {
   const sessions = new Map(["alice", "bob"].map((id) => [id, account(id)]));
+  for (const id of ["alice", "bob"]) sessions.set(`mobile-${id}`, { ...account(id), session: { ...account(id).session, id: `mobile-session-${id}` } });
+  const callbacks = new Map<string, URL>();
   const server = Bun.serve({ ...createRobotGateway({ origin, validationIntervalMs: 20,
+    authBaseUrl: "http://localhost:3000", googleEnabled,
     resolve: async (headers) => sessions.get(headers.get("cookie") ?? "") ?? null,
-    authHandler: async () => new Response("Test auth"),
+    authHandler: async (request) => {
+      const body = await request.json() as { provider: string; callbackURL: string; errorCallbackURL: string };
+      expect(body.provider).toBe("google");
+      expect(body.callbackURL).toBe(body.errorCallbackURL);
+      const callback = new URL(body.callbackURL);
+      callbacks.set(callback.searchParams.get("request")!, callback);
+      return Response.json({ url: "https://accounts.google.com/o/oauth2/v2/auth?state=provider-state" }, { headers: { "Set-Cookie": "oauth-state=provider-state; HttpOnly" } });
+    },
   }), port: 0, hostname: "127.0.0.1" });
   const base = `http://127.0.0.1:${server.port}`;
   const sockets: WebSocket[] = [];
   cleanups.push(async () => { sockets.forEach((socket) => socket.close()); await Bun.sleep(10); await server.stop(true); });
   const api = (path: string, id?: string, body?: unknown, token?: string) => fetch(base + path, {
-    method: body !== undefined ? "POST" : "GET", headers: { origin, ...(id ? { cookie: id } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
+    method: body !== undefined ? "POST" : "GET", redirect: "manual", headers: { origin, ...(id ? { cookie: id } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
-  const link = async (id: string) => {
-    const code = await (await api("/api/mobile/link-code", id, {})).json() as { code: string };
-    return await (await api("/api/mobile/link", undefined, code)).json() as { token: string; user: { id: string } };
+  const begin = async () => {
+    const state = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+    const verifier = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+    const started = await (await api("/api/mobile/oauth/start", undefined, { state, code_challenge: pkceChallenge(verifier) })).json() as { authorization_url: string };
+    const authorize = new URL(started.authorization_url);
+    const response = await api(authorize.pathname + authorize.search);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toStartWith("https://accounts.google.com/");
+    expect(response.headers.get("set-cookie")).toContain("oauth-state");
+    return { state, verifier, callback: callbacks.get(authorize.searchParams.get("request")!)!, authorize };
+  };
+  const signIn = async (id: string) => {
+    const attempt = await begin();
+    const result = await api(attempt.callback.pathname + attempt.callback.search, `mobile-${id}`);
+    const link = new URL(result.headers.get("location")!);
+    expect(link.searchParams.get("state")).toBe(attempt.state);
+    return await (await api("/api/mobile/oauth/exchange", undefined, { code: link.searchParams.get("code"), code_verifier: attempt.verifier })).json() as { token: string; user: { id: string } };
   };
   const socket = async (role: "web" | "phone", identity: string) => {
     let url = base.replace("http:", "ws:") + `/ws?role=${role}`;
@@ -41,29 +66,37 @@ function fixture() {
     await until(() => ws.readyState === WebSocket.OPEN);
     return { ws, messages };
   };
-  return { server, sessions, base, api, link, socket };
+  return { server, sessions, base, api, signIn, socket, begin };
 }
 
-test("link codes and socket tickets require the existing signed-in browser and trusted origin", async () => {
+test("manual-code routes are removed; socket tickets require a signed-in browser and trusted origin", async () => {
   const f = fixture();
-  expect((await f.api("/api/mobile/link-code", undefined, {})).status).toBe(401);
+  expect((await f.api("/api/mobile/link-code", undefined, {})).status).toBe(404);
+  expect((await f.api("/api/mobile/link", undefined, {})).status).toBe(404);
   expect((await f.api("/api/mobile/web-ticket", undefined, {})).status).toBe(401);
-  expect((await fetch(f.base + "/api/mobile/link-code", { method: "POST", headers: { cookie: "alice", origin: "https://evil.invalid" } })).status).toBe(403);
-  expect((await fetch(f.base + "/api/mobile/link-code", { method: "POST", headers: { cookie: "alice" } })).status).toBe(403);
+  expect((await fetch(f.base + "/api/mobile/web-ticket", { method: "POST", headers: { cookie: "alice", origin: "https://evil.invalid" } })).status).toBe(403);
+  expect((await fetch(f.base + "/api/mobile/web-ticket", { method: "POST", headers: { cookie: "alice" } })).status).toBe(403);
   expect((await fetch(f.base + "/ws?role=phone")).status).toBe(401);
   expect((await f.api("/api/mobile/me")).status).toBe(401);
   expect((await f.api("/api/mobile/session")).status).toBe(401);
 });
 
-test("a phone signs in as the same account, codes are one-use, and credentials cannot be forged", async () => {
+test("Google returns to the APK, PKCE is required, and the exchange cannot be replayed", async () => {
   const f = fixture();
-  const issued = await (await f.api("/api/mobile/link-code", "alice", {})).json() as { code: string };
-  const response = await f.api("/api/mobile/link", undefined, { code: issued.code.toLowerCase().replace(/(.{4})/g, "$1 ") });
+  const attempt = await f.begin();
+  const callback = await f.api(attempt.callback.pathname + attempt.callback.search, "mobile-alice");
+  const destination = new URL(callback.headers.get("location")!);
+  expect(destination.origin).toBe("null");
+  expect(destination.protocol).toBe("com.iris.robot:");
+  expect(destination.searchParams.has("token")).toBe(false);
+  const exchange = { code: destination.searchParams.get("code"), code_verifier: attempt.verifier };
+  expect((await f.api("/api/mobile/oauth/exchange", undefined, { ...exchange, code_verifier: "x".repeat(43) })).status).toBe(401);
+  const response = await f.api("/api/mobile/oauth/exchange", undefined, exchange);
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
   const linked = await response.json() as { token: string; user: { id: string } };
   expect(linked.user.id).toBe("alice");
-  expect((await f.api("/api/mobile/link", undefined, issued)).status).toBe(401);
+  expect((await f.api("/api/mobile/oauth/exchange", undefined, exchange)).status).toBe(401);
   expect((await f.api("/api/mobile/me", undefined, undefined, "alice")).status).toBe(401);
   const me = await (await f.api("/api/mobile/me", undefined, undefined, linked.token)).json() as { user: { id: string } };
   expect(me.user.id).toBe("alice");
@@ -73,7 +106,7 @@ test("a phone signs in as the same account, codes are one-use, and credentials c
 
 test("media and confirmed speech are isolated by the authenticated account, including spoofed user IDs", async () => {
   const f = fixture();
-  const alice = await f.link("alice"), bob = await f.link("bob");
+  const alice = await f.signIn("alice"), bob = await f.signIn("bob");
   const aw = await f.socket("web", "alice"), bw = await f.socket("web", "bob");
   const ap = await f.socket("phone", alice.token), bp = await f.socket("phone", bob.token);
   ap.ws.send(JSON.stringify({ type: "rtc_offer", sdp: "alice-camera", user_id: "bob", ts: Date.now() }));
@@ -90,18 +123,21 @@ test("media and confirmed speech are isolated by the authenticated account, incl
   expect(ap.messages.some((message) => message.type === "drive_intent")).toBe(false);
 });
 
-test("laptop sign-out revokes its phone credential and closes both active sockets", async () => {
+test("phone and laptop sign in independently to the same account; laptop sign-out closes only its socket", async () => {
   const f = fixture();
-  const linked = await f.link("alice");
+  const linked = await f.signIn("alice");
   const web = await f.socket("web", "alice"), phone = await f.socket("phone", linked.token);
   f.sessions.delete("alice");
-  expect((await f.api("/api/mobile/me", undefined, undefined, linked.token)).status).toBe(401);
-  await until(() => web.ws.readyState === WebSocket.CLOSED && phone.ws.readyState === WebSocket.CLOSED);
+  expect((await f.api("/api/mobile/me", undefined, undefined, linked.token)).status).toBe(200);
+  await until(() => web.ws.readyState === WebSocket.CLOSED);
+  expect(phone.ws.readyState).toBe(WebSocket.OPEN);
+  f.sessions.delete("mobile-alice");
+  await until(() => phone.ws.readyState === WebSocket.CLOSED);
 });
 
 test("phone sign-out revokes the credential and closes the phone without signing the laptop out", async () => {
   const f = fixture();
-  const linked = await f.link("alice");
+  const linked = await f.signIn("alice");
   const web = await f.socket("web", "alice"), phone = await f.socket("phone", linked.token);
   expect((await f.api("/api/mobile/logout", undefined, {}, linked.token)).status).toBe(200);
   await until(() => phone.ws.readyState === WebSocket.CLOSED);
@@ -111,44 +147,88 @@ test("phone sign-out revokes the credential and closes the phone without signing
 
 test("relinking replaces the old phone, and replacing a console preserves correct presence", async () => {
   const f = fixture();
-  const first = await f.link("alice");
+  const first = await f.signIn("alice");
   const oldPhone = await f.socket("phone", first.token);
   const oldWeb = await f.socket("web", "alice");
   const newWeb = await f.socket("web", "alice");
   await until(() => oldWeb.ws.readyState === WebSocket.CLOSED);
   expect(newWeb.messages.some((message) => message.type === "peer_status" && message.phone === true)).toBe(true);
-  const second = await f.link("alice");
+  const second = await f.signIn("alice");
   await until(() => oldPhone.ws.readyState === WebSocket.CLOSED);
   expect((await f.api("/api/mobile/me", undefined, undefined, first.token)).status).toBe(401);
   await f.socket("phone", second.token);
   await until(() => newWeb.messages.some((message) => message.type === "peer_status" && message.phone === true));
 });
 
-test("link attempts are rate limited without trusting forwarded caller IP headers", async () => {
+test("OAuth attempts are rate limited without trusting forwarded caller IP headers", async () => {
   const f = fixture();
-  for (let i = 0; i < 10; i++) expect((await f.api("/api/mobile/link", undefined, { code: "000000000000" })).status).toBe(401);
-  expect((await f.api("/api/mobile/link", undefined, { code: "000000000000" })).status).toBe(429);
+  for (let i = 0; i < 10; i++) expect((await f.api("/api/mobile/oauth/start", undefined, {})).status).toBe(400);
+  expect((await f.api("/api/mobile/oauth/start", undefined, {})).status).toBe(429);
 });
 
-test("codes expire, regeneration invalidates the previous code, and websocket tickets are single-use", async () => {
+test("OAuth attempts and exchange codes expire, and websocket tickets are single-use", async () => {
   let now = Date.now();
   const pairing = new Pairing(async () => account("alice"), () => now);
   const identity = (await pairing.browser(cookie("alice")))!;
-  const old = pairing.code(identity), current = pairing.code(identity);
-  expect(await pairing.exchange(old.code)).toBeNull();
+  const oauth = new MobileOAuth(pairing, () => now);
+  const verifier = "v".repeat(43);
+  const start = oauth.begin("s".repeat(43), pkceChallenge(verifier))!;
+  const unstarted = oauth.begin("u".repeat(43), pkceChallenge(verifier))!;
+  const pending = oauth.authorize(start.request)!;
+  expect(oauth.takeCallback(start.request, "forged-key")).toBeNull();
+  const completed = oauth.complete(oauth.takeCallback(start.request, pending.returnKey)!, identity);
+  const code = new URL(completed).searchParams.get("code")!;
+  expect(oauth.takeCallback(start.request, pending.returnKey)).toBeNull();
   const ticket = pairing.ticket(identity);
   expect(await pairing.consumeTicket(ticket)).not.toBeNull();
   expect(await pairing.consumeTicket(ticket)).toBeNull();
   const expiredTicket = pairing.ticket(identity);
   now += 31_000;
   expect(await pairing.consumeTicket(expiredTicket)).toBeNull();
+  now += 60_000;
+  expect(await oauth.exchange(code, verifier)).toBeNull();
   now += 5 * 60_000;
-  expect(await pairing.exchange(current.code)).toBeNull();
+  expect(oauth.authorize(unstarted.request)).toBeNull();
 });
 
-test("concurrent exchanges cannot consume a link code twice", async () => {
+test("forged callbacks cannot bypass Google and cancellation returns safely to the app", async () => {
+  const f = fixture();
+  const attempt = await f.begin();
+  const forged = new URL(attempt.callback);
+  forged.searchParams.set("return_key", "forged");
+  expect((await f.api(forged.pathname + forged.search, "mobile-alice")).status).toBe(400);
+  const canceled = new URL(attempt.callback);
+  canceled.searchParams.set("error", "access_denied");
+  const response = await f.api(canceled.pathname + canceled.search, "mobile-alice");
+  const result = new URL(response.headers.get("location")!);
+  expect(result.searchParams.get("state")).toBe(attempt.state);
+  expect(result.searchParams.get("error")).toBe("access_denied");
+  expect(result.searchParams.has("code")).toBe(false);
+  expect((await f.api(attempt.callback.pathname + attempt.callback.search, "mobile-alice")).status).toBe(400);
+});
+
+test("an OAuth return without a verified Better Auth session never signs the phone in", async () => {
+  const f = fixture();
+  const attempt = await f.begin();
+  const response = await f.api(attempt.callback.pathname + attempt.callback.search);
+  const result = new URL(response.headers.get("location")!);
+  expect(result.searchParams.get("error")).toBe("sign_in_failed");
+  expect(result.searchParams.has("code")).toBe(false);
+});
+
+test("a missing Google configuration is reported before opening the browser", async () => {
+  const f = fixture(false);
+  expect((await f.api("/api/mobile/oauth/start", undefined, { state: "s".repeat(43), code_challenge: pkceChallenge("v".repeat(43)) })).status).toBe(503);
+});
+
+test("concurrent PKCE exchanges cannot issue two phone credentials", async () => {
   const pairing = new Pairing(async () => account("alice"));
-  const code = pairing.code((await pairing.browser(cookie("alice")))!).code;
-  const results = await Promise.all([pairing.exchange(code), pairing.exchange(code)]);
+  const oauth = new MobileOAuth(pairing);
+  const verifier = "v".repeat(43);
+  const start = oauth.begin("s".repeat(43), pkceChallenge(verifier))!;
+  const pending = oauth.authorize(start.request)!;
+  const result = oauth.complete(oauth.takeCallback(start.request, pending.returnKey)!, (await pairing.browser(cookie("alice")))!);
+  const code = new URL(result).searchParams.get("code");
+  const results = await Promise.all([oauth.exchange(code, verifier), oauth.exchange(code, verifier)]);
   expect(results.filter(Boolean)).toHaveLength(1);
 });

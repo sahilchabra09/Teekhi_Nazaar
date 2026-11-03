@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import type { Server, ServerWebSocket } from "bun";
 import { Pairing, type Identity, type SessionResolver } from "./pairing";
+import { MobileOAuth, appCallback } from "./oauth";
 
 type Role = "web" | "phone";
 interface PeerData { role: Role; identity: Identity; check?: ReturnType<typeof setInterval>; checking?: boolean; window: number; messages: number }
@@ -13,14 +14,19 @@ export function createRobotGateway(options: {
   resolve: SessionResolver;
   origin: string;
   authHandler: (request: Request) => Promise<Response>;
+  authBaseUrl: string;
+  googleEnabled: boolean;
   validationIntervalMs?: number;
 }) {
   const pairing = new Pairing(options.resolve);
+  const oauth = new MobileOAuth(pairing);
+  const authBase = new URL(options.authBaseUrl).origin;
   const rooms = new Map<string, Map<Role, Peer>>();
   const app = new Hono();
   app.use("/*", cors({ origin: options.origin, credentials: true, allowMethods: ["GET", "POST", "OPTIONS"], allowHeaders: ["Content-Type", "Authorization"] }));
   app.use("/api/mobile/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
+    c.header("Referrer-Policy", "no-referrer");
     const origin = c.req.header("origin");
     if (origin && origin !== options.origin) return c.json({ error: "Untrusted origin" }, 403);
     await next();
@@ -29,20 +35,55 @@ export function createRobotGateway(options: {
   app.on(["POST", "GET"], "/api/auth/*", (c) => options.authHandler(c.req.raw));
   app.get("/", (c) => c.text("IRIS API"));
   app.get("/health", (c) => c.json({ ok: true, media: "authenticated" }));
-  app.post("/api/mobile/link-code", async (c) => {
-    // A browser-only, explicit authorization action protected against cross-site requests.
-    if (c.req.header("origin") !== options.origin) return c.json({ error: "Open the IRIS console to link a phone" }, 403);
-    const identity = await pairing.browser(c.req.raw.headers);
-    return identity ? c.json(pairing.code(identity)) : c.json({ error: "Sign in to link your phone" }, 401);
-  });
-  app.post("/api/mobile/link", async (c) => {
-    // Do not trust X-Forwarded-For supplied by the caller. Reverse proxies should enforce
-    // their own rate limit as well; direct Bun deployments use the actual peer address.
-    const ip = (c.env as { server?: Server<PeerData> } | undefined)?.server?.requestIP(c.req.raw)?.address ?? "unknown";
-    if (!pairing.allowAttempt(ip)) return c.json({ error: "Too many attempts. Wait one minute and try again." }, 429);
+  const allowAttempt = (request: Request, server?: Server<PeerData>) => pairing.allowAttempt(server?.requestIP(request)?.address ?? "unknown");
+  app.post("/api/mobile/oauth/start", async (c) => {
+    if (!options.googleEnabled) return c.json({ error: "Google sign-in is not configured on the server" }, 503);
+    if (!allowAttempt(c.req.raw, (c.env as { server?: Server<PeerData> }).server)) return c.json({ error: "Too many attempts. Try again in one minute." }, 429);
     const body = await c.req.json().catch(() => null);
-    const result = typeof body?.code === "string" && body.code.length <= 32 ? await pairing.exchange(body.code) : null;
-    if (!result) return c.json({ error: "Code is invalid or expired. Generate a new code on your laptop." }, 401);
+    const attempt = oauth.begin(body?.state, body?.code_challenge);
+    if (!attempt) return c.json({ error: "Invalid OAuth request" }, 400);
+    const url = new URL("/api/mobile/oauth/authorize", authBase);
+    url.searchParams.set("request", attempt.request);
+    return c.json({ authorization_url: url.toString(), expires_at_ms: attempt.expires_at_ms });
+  });
+  app.get("/api/mobile/oauth/authorize", async (c) => {
+    const request = c.req.query("request") ?? "";
+    const pending = oauth.authorize(request);
+    if (!pending) return c.text("Sign-in expired. Return to IRIS and tap Continue with Google again.", 400);
+    const callback = new URL("/api/mobile/oauth/callback", authBase);
+    callback.searchParams.set("request", request);
+    callback.searchParams.set("return_key", pending.returnKey);
+    try {
+      // Let Better Auth create/verify the Google OAuth state, PKCE and session.
+      // Forward its state cookie to the external browser before redirecting to Google.
+      const response = await options.authHandler(new Request(new URL("/api/auth/sign-in/social", authBase).toString(), {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: authBase, Cookie: c.req.header("cookie") ?? "" },
+        body: JSON.stringify({ provider: "google", callbackURL: callback.toString(), errorCallbackURL: callback.toString(), disableRedirect: true }),
+      }));
+      const body = await response.json() as { url?: unknown };
+      if (!response.ok || typeof body.url !== "string") throw new Error("Google initialization failed");
+      const google = new URL(body.url);
+      if (google.protocol !== "https:" || google.hostname !== "accounts.google.com") throw new Error("Invalid Google destination");
+      for (const cookie of response.headers.getSetCookie()) c.header("Set-Cookie", cookie, { append: true });
+      return c.redirect(google.toString(), 302);
+    } catch {
+      oauth.takeCallback(request, pending.returnKey);
+      return c.redirect(appCallback(pending.state, { error: "sign_in_unavailable" }), 302);
+    }
+  });
+  app.get("/api/mobile/oauth/callback", async (c) => {
+    const attempt = oauth.takeCallback(c.req.query("request") ?? "", c.req.query("return_key") ?? "");
+    if (!attempt) return c.text("Sign-in expired. Return to IRIS and try again.", 400);
+    if (c.req.query("error")) return c.redirect(appCallback(attempt.state, { error: "access_denied" }), 302);
+    const identity = await pairing.browser(c.req.raw.headers);
+    if (!identity) return c.redirect(appCallback(attempt.state, { error: "sign_in_failed" }), 302);
+    return c.redirect(oauth.complete(attempt, identity), 302);
+  });
+  app.post("/api/mobile/oauth/exchange", async (c) => {
+    if (!allowAttempt(c.req.raw, (c.env as { server?: Server<PeerData> }).server)) return c.json({ error: "Too many attempts. Try again in one minute." }, 429);
+    const body = await c.req.json().catch(() => null);
+    const result = await oauth.exchange(body?.code, body?.code_verifier);
+    if (!result) return c.json({ error: "Google sign-in expired. Please sign in again." }, 401);
     // Replacing a link immediately closes obsolete phone sockets.
     for (const room of rooms.values()) for (const peer of room.values()) {
       if (peer.data.role === "phone" && !await pairing.valid(peer.data.identity)) peer.close(1008, "Link replaced");
@@ -56,7 +97,7 @@ export function createRobotGateway(options: {
   });
   app.get("/api/mobile/me", async (c) => {
     const identity = await pairing.phone(c.req.raw.headers);
-    return identity ? c.json({ user: identity.account.user, expires_at_ms: identity.expires }) : c.json({ error: "Link your phone again from the laptop" }, 401);
+    return identity ? c.json({ user: identity.account.user, expires_at_ms: identity.expires }) : c.json({ error: "Sign in with Google again" }, 401);
   });
   app.post("/api/mobile/logout", async (c) => {
     const identity = await pairing.phone(c.req.raw.headers);
