@@ -206,6 +206,13 @@ The schema lives in `packages/db/src/schema/care.ts` (+ `role` in `auth.ts`) and
 
 ---
 
+### How the routes are served
+
+`apps/server/src/index.ts` runs the **robot gateway** (auth, `/api/mobile/*`, `/ws` media relay) and sends `/api/me`, `/api/doctor/*` and `/api/talk/*` to a separate Hono app.
+- That app has its own CORS (adds `PATCH`/`DELETE` for doctors).
+- The Bun request body limit is **30 MB**, so reports (≤ 25 MB) and audio clips fit.
+- `/api/mobile/*` keeps its own 4 KB limit inside the gateway.
+
 ## 8. Configuration (`apps/server/.env`)
 
 | Variable | Default | |
