@@ -1,16 +1,14 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import Console from "@/components/console/console";
-import { authClient } from "@/lib/auth-client";
+import { getSessionUser } from "@/lib/session";
 
-export default async function ConsolePage() {
-  const session = await authClient
-    .getSession({ fetchOptions: { headers: await headers() } })
-    .then((r) => r.data)
-    .catch(() => null);
+/** Entry point: sends each role to its own dashboard (docs/care.md §2). */
+export default async function HomePage() {
+  const user = await getSessionUser();
+  if (!user) redirect("/login");
+  if (!user.role) redirect("/onboarding");
+  if (user.role === "doctor") redirect("/doctor");
 
-  if (!session?.user) redirect("/login");
-
-  return <Console userName={session.user.name || session.user.email} />;
+  return <Console userName={user.name || user.email} />;
 }
