@@ -1,0 +1,5 @@
+Firmware headers belong in this directory.
+
+Copy bot_secrets.example.h to bot_secrets.h and set local credentials before
+building. bot_secrets.h is ignored by Git; the example contains placeholders only.
+The firmware validates setup AP and initial control password lengths at compile time.

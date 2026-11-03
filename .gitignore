@@ -56,3 +56,9 @@ coverage
 .cache
 tmp
 temp
+
+# ESP8266 / uv tooling
+.venv/
+.platformio/
+__pycache__/
+*.py[cod]
