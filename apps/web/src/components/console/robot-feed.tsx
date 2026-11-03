@@ -1,0 +1,163 @@
+"use client";
+
+import { Video } from "lucide-react";
+import { useEffect, useRef } from "react";
+
+import { IrisMark } from "@/components/iris/logo";
+
+import { useDwell } from "./use-dwell";
+
+export type Direction = "forward" | "backward" | "left" | "right";
+
+type Props = {
+  stream: MediaStream | null;
+  mirrored?: boolean;
+  driveEnabled: boolean;
+  moving: Direction | null;
+  heard: string | null;
+  onMove: (d: Direction) => void;
+  onPreviewWebcam: () => void;
+};
+
+export function RobotFeed({ stream, mirrored, driveEnabled, moving, heard, onMove, onPreviewWebcam }: Props) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = stream;
+  }, [stream]);
+
+  return (
+    <div className="relative h-full overflow-hidden rounded-[1.5rem] bg-pine shadow-[0_10px_30px_-12px_rgb(18_56_50/0.45)]">
+      {stream ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="size-full object-cover"
+          style={mirrored ? { transform: "scaleX(-1)" } : undefined}
+        />
+      ) : (
+        <EmptyFeed onPreviewWebcam={onPreviewWebcam} />
+      )}
+
+      <GuideLines />
+
+      {/* Invisible gaze drive zones along the edges. Only a soft glow shows while one is active.
+          The centre of the feed is a safe zone that never moves the robot. */}
+      {driveEnabled && (
+        <>
+          <EdgeZone dir="forward" onMove={onMove} active={moving === "forward"} />
+          <EdgeZone dir="backward" onMove={onMove} active={moving === "backward"} />
+          <EdgeZone dir="left" onMove={onMove} active={moving === "left"} />
+          <EdgeZone dir="right" onMove={onMove} active={moving === "right"} />
+        </>
+      )}
+
+      {/* What someone near the robot just said */}
+      {heard && (
+        <div className="pointer-events-none absolute top-[14%] left-1/2 max-w-[70%] -translate-x-1/2 rounded-2xl rounded-bl-sm bg-honey px-5 py-3 text-pine shadow-[0_12px_28px_-10px_rgb(0_0_0/0.45)]">
+          <p className="text-xs font-semibold opacity-70">Someone nearby said</p>
+          <p className="font-display text-[clamp(1.2rem,1.8vw,1.6rem)] leading-tight font-bold">“{heard}”</p>
+        </div>
+      )}
+
+      {moving && (
+        <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-white/90 px-4 py-1.5 text-sm font-semibold text-pine">
+          Moving {moving}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Guide grid on the feed:
+ * - 2 vertical lines → left 25% | middle 50% (widest) | right 25%
+ * - 4 horizontal lines inside the middle column → 5 rows; the centre row is tallest (40%),
+ *   the other four are equal (15% each).
+ * Every line has its own colour.
+ */
+const V_LINES = [
+  { left: "25%", color: "#f4b23e" }, // honey
+  { left: "75%", color: "#8ec5dd" }, // sky
+];
+const H_LINES = [
+  { top: "15%", color: "#e4553f" }, // tomato
+  { top: "30%", color: "#9bd56a" }, // lime
+  { top: "70%", color: "#ff8fb1" }, // pink
+  { top: "85%", color: "#3fd1b8" }, // aqua
+];
+
+function GuideLines() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0">
+      {V_LINES.map((l) => (
+        <span
+          key={l.left}
+          className="absolute inset-y-0 w-0.5 -translate-x-1/2 opacity-80"
+          style={{ left: l.left, background: l.color, boxShadow: `0 0 8px ${l.color}` }}
+        />
+      ))}
+      {H_LINES.map((l) => (
+        <span
+          key={l.top}
+          className="absolute opacity-80"
+          style={{
+            top: l.top,
+            left: "25%",
+            width: "50%",
+            height: 2,
+            transform: "translateY(-50%)",
+            background: l.color,
+            boxShadow: `0 0 8px ${l.color}`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+const ZONE: Record<Direction, { box: string; glow: string; label: string }> = {
+  forward: { box: "inset-x-[15%] top-0 h-[13%]", glow: "bg-gradient-to-b", label: "Drive forward" },
+  backward: { box: "inset-x-[15%] bottom-0 h-[13%]", glow: "bg-gradient-to-t", label: "Reverse" },
+  left: { box: "inset-y-[15%] left-0 w-[10%]", glow: "bg-gradient-to-r", label: "Turn left" },
+  right: { box: "inset-y-[15%] right-0 w-[10%]", glow: "bg-gradient-to-l", label: "Turn right" },
+};
+
+function EdgeZone({ dir, onMove, active }: { dir: Direction; onMove: (d: Direction) => void; active: boolean }) {
+  const { ref, dwelling, props } = useDwell<HTMLDivElement>(() => onMove(dir), { ms: 600, repeatMs: 150 });
+  const z = ZONE[dir];
+  return (
+    <div
+      ref={ref}
+      {...props}
+      role="button"
+      aria-label={z.label}
+      className={`absolute ${z.box} ${z.glow} from-honey/45 to-transparent transition-opacity duration-300 ${
+        active ? "opacity-100" : dwelling ? "opacity-50" : "opacity-0"
+      }`}
+    />
+  );
+}
+
+function EmptyFeed({ onPreviewWebcam }: { onPreviewWebcam: () => void }) {
+  return (
+    <div className="grid size-full place-items-center">
+      <div className="flex max-w-sm flex-col items-center px-6 text-center">
+        <IrisMark size={72} />
+        <h2 className="mt-5 font-display text-2xl font-bold text-white">Waiting for the robot’s camera</h2>
+        <p className="mt-2 text-[15px] leading-relaxed text-white/60">
+          Open the IRIS app on the robot’s phone. The live view appears here as soon as it connects.
+        </p>
+        <button
+          onClick={onPreviewWebcam}
+          className="mt-6 flex items-center gap-2 rounded-full bg-white/10 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-white/15 transition-colors hover:bg-white/15"
+        >
+          <Video className="size-4" />
+          Preview with this laptop’s camera
+        </button>
+      </div>
+    </div>
+  );
+}
