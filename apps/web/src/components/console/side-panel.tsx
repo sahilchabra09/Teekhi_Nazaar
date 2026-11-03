@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, RefreshCw } from "lucide-react";
+import { ChevronLeft, KeyRound, RefreshCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { useDwell } from "./use-dwell";
@@ -34,28 +34,32 @@ type Props = {
   heading: string;
   /** Shown when the panel is in a sub-view; dwell on it to go back. */
   back?: { label: string; onSelect: () => void };
-  /** Optional second pill, e.g. "New replies". */
-  extra?: { label: string; onSelect: () => void };
+  /** Optional second pill, e.g. "New replies" or "Password". */
+  extra?: { label: string; onSelect: () => void; icon?: "refresh" | "settings" };
   cards: PanelCard[];
+  /** Custom content instead of the three cards (e.g. the appliance grid). */
+  children?: React.ReactNode;
   footer?: React.ReactNode;
 };
 
-export function SidePanel({ heading, back, extra, cards, footer }: Props) {
+export function SidePanel({ heading, back, extra, cards, children, footer }: Props) {
   return (
     <aside className="flex h-full min-h-0 flex-col gap-3" aria-label="Actions">
       <div className="flex min-h-10 items-center justify-between gap-2 px-1">
         <h2 className="font-display text-lg leading-tight font-bold text-pine">{heading}</h2>
         <div className="flex shrink-0 items-center gap-2">
-          {extra && <Pill {...extra} icon="refresh" />}
+          {extra && <Pill {...extra} icon={extra.icon ?? "refresh"} />}
           {back && <Pill {...back} icon="back" />}
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-5 px-1 pb-2">
-        {cards.map((c) =>
-          c.kind === "preview" ? <PreviewCard key={c.key} card={c} /> : <ActionCard key={c.key} card={c} />,
-        )}
-      </div>
+      {children ?? (
+        <div className="flex min-h-0 flex-1 flex-col gap-5 px-1 pb-2">
+          {cards.map((c) =>
+            c.kind === "preview" ? <PreviewCard key={c.key} card={c} /> : <ActionCard key={c.key} card={c} />,
+          )}
+        </div>
+      )}
 
       {footer}
     </aside>
@@ -134,9 +138,9 @@ function LevelMeter({ level }: { level: number }) {
   );
 }
 
-function Pill({ label, onSelect, icon }: { label: string; onSelect: () => void; icon: "back" | "refresh" }) {
+function Pill({ label, onSelect, icon }: { label: string; onSelect: () => void; icon: "back" | "refresh" | "settings" }) {
   const { ref, props } = useDwell<HTMLButtonElement>(onSelect, { ms: 800 });
-  const Icon = icon === "back" ? ChevronLeft : RefreshCw;
+  const Icon = icon === "back" ? ChevronLeft : icon === "settings" ? KeyRound : RefreshCw;
   return (
     <button
       ref={ref}
