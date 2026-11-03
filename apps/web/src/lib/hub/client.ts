@@ -1,22 +1,12 @@
 import type { HubClient, HubMessage } from "../rtc/robot-stream";
+import { authenticatedHubUrl, HubAuthorizationError } from "./account";
+import { hubWebSocketUrl } from "./address";
+export { hubWebSocketUrl } from "./address";
 
-export type HubState = "connecting" | "connected" | "reconnecting" | "disconnected" | "replaced";
+export type HubState = "connecting" | "connected" | "reconnecting" | "disconnected" | "replaced" | "unauthorized";
 export interface ApplicationHub extends HubClient { close(): void }
 
-export function hubWebSocketUrl(address: string): URL {
-  const raw = address.trim();
-  if (!raw) throw new Error("Enter the media hub address");
-  const url = new URL(raw.includes("://") ? raw : `http://${raw}`);
-  if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol) || url.username || url.password) throw new Error("Use an HTTP or WebSocket hub URL without credentials");
-  if (!["/", "/ws"].includes(url.pathname)) throw new Error("The hub address must point to / or /ws");
-  if (!raw.includes("://") && !url.port) url.port = "3000";
-  url.protocol = ["https:", "wss:"].includes(url.protocol) ? "wss:" : "ws:";
-  url.pathname = "/ws"; url.search = "role=web"; url.hash = "";
-  return url;
-}
-
-/** Console hub transport. Browser cookies accompany the connection;
- * the backend must authenticate them and authorize the phone/session being paired. */
+/** Better Auth sessions are exchanged for short-lived, single-use WebSocket tickets. */
 export function createApplicationHub(address: string, changed: (state: HubState) => void): ApplicationHub {
   const url = hubWebSocketUrl(address);
   const handlers = new Map<string, Set<(message: HubMessage) => void>>();
@@ -25,16 +15,28 @@ export function createApplicationHub(address: string, changed: (state: HubState)
   let attempts = 0;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let peers: HubMessage | null = null;
+  let pending: AbortController | undefined;
   const emit = (message: HubMessage) => {
     if (message.type === "peer_status") peers = message;
     handlers.get(message.type)?.forEach((callback) => callback(message));
   };
-  const connect = () => {
+  const connect = async () => {
     if (stopped) return;
     changed(attempts ? "reconnecting" : "connecting");
     let ws: WebSocket;
-    try { ws = new WebSocket(url); }
-    catch { changed("disconnected"); return; }
+    pending = new AbortController();
+    const timeout = setTimeout(() => pending?.abort(), 15_000);
+    try {
+      const authenticated = await authenticatedHubUrl(url.toString(), pending.signal);
+      if (stopped) return;
+      ws = new WebSocket(authenticated);
+    } catch (cause) {
+      if (!stopped) {
+        if (cause instanceof HubAuthorizationError) { stopped = true; changed("unauthorized"); }
+        else { changed("reconnecting"); retry = setTimeout(connect, Math.min(500 * 2 ** attempts++, 30_000)); }
+      }
+      return;
+    } finally { clearTimeout(timeout); }
     socket = ws;
     ws.onopen = () => {
       if (stopped || socket !== ws) return;
@@ -54,12 +56,12 @@ export function createApplicationHub(address: string, changed: (state: HubState)
       if (stopped || socket !== ws) return;
       emit({ type: "peer_status", phone: false, web: false, ts: Date.now() });
       // Do not fight another console tab for the single web role.
-      if (event.code === 4001 || event.code === 1008) { stopped = true; changed("replaced"); return; }
+      if (event.code === 4001 || event.code === 1008) { stopped = true; changed(event.code === 1008 ? "unauthorized" : "replaced"); return; }
       changed("reconnecting");
       retry = setTimeout(connect, Math.min(500 * 2 ** attempts++, 30_000));
     };
   };
-  connect();
+  void connect();
   return {
     send(message) {
       if (stopped || socket?.readyState !== WebSocket.OPEN) throw new Error("Media hub is disconnected");
@@ -78,7 +80,7 @@ export function createApplicationHub(address: string, changed: (state: HubState)
     },
     close() {
       if (retry) clearTimeout(retry);
-      stopped = true; socket?.close();
+      stopped = true; pending?.abort(); socket?.close();
       emit({ type: "peer_status", phone: false, web: false, ts: Date.now() });
       changed("disconnected"); handlers.clear();
     },

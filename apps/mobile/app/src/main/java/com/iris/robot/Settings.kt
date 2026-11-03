@@ -23,6 +23,9 @@ import javax.crypto.spec.GCMParameterSpec
     val brokerPassword: String = "",
     val sessionToken: String = "",
     val allowLocalSessionHttp: Boolean = false,
+    val accountToken: String = "",
+    val accountEmail: String = "",
+    val accountExpiresAt: Long = 0,
 )
 
 /** The full settings blob is encrypted; ESP/broker/session secrets never enter ordinary preferences. */

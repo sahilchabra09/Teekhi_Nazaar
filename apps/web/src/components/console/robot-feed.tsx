@@ -179,7 +179,7 @@ function EmptyFeed({ onPreviewWebcam, mediaState }: { onPreviewWebcam: () => voi
         <IrisMark size={72} />
         <h2 className="mt-5 font-display text-2xl font-bold text-white">{mediaState === "failed" ? "Robot video unavailable" : "Waiting for the robot’s camera"}</h2>
         <p className="mt-2 text-[15px] leading-relaxed text-white/60">
-          Connect to the media hub above and start IRIS on the robot’s phone. Its camera appears here; your laptop camera is shared to the phone.
+                Link the phone to your account above, start IRIS on the phone, then click Connect phone. Its camera appears here; your laptop camera is shared to the phone.
         </p>
         <button
           onClick={onPreviewWebcam}

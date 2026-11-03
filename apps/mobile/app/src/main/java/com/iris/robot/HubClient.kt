@@ -13,6 +13,8 @@ class HubClient(
     private val scope: CoroutineScope,
     private val onState: (Boolean, String) -> Unit,
     private val onMessage: (Msg) -> Unit,
+    private val accountToken: String,
+    private val onUnauthorized: () -> Unit,
 ) : AutoCloseable {
     private val client = OkHttpClient.Builder().pingInterval(10, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
     @Volatile private var socket: WebSocket? = null
@@ -27,7 +29,7 @@ class HubClient(
         if (stopped) return
         val epoch = ++generation
         onState(false, if (attempt == 0) "Connecting" else "Reconnecting")
-        socket = client.newWebSocket(Request.Builder().url(address.websocket).build(), object : WebSocketListener() {
+        socket = client.newWebSocket(Request.Builder().url(address.websocket).header("Authorization", "Bearer $accountToken").build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 scope.launch(Dispatchers.Main.immediate) {
                     if (epoch != generation || stopped) { webSocket.close(1000, null); return@launch }
@@ -47,9 +49,21 @@ class HubClient(
                 }
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { disconnected(epoch) }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { disconnected(epoch) }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (code == 1008 || code == 4001) unauthorized(epoch) else disconnected(epoch)
+            }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (response?.code == 401 || response?.code == 403) unauthorized(epoch) else disconnected(epoch)
+            }
         })
+    }
+    private fun unauthorized(epoch: Int) {
+        scope.launch(Dispatchers.Main.immediate) {
+            if (stopped || epoch != generation) return@launch
+            stopped = true; open = false; retry?.cancel()
+            onState(false, "Account link ended")
+            onUnauthorized()
+        }
     }
     private fun disconnected(epoch: Int) {
         scope.launch(Dispatchers.Main.immediate) {

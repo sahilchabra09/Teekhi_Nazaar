@@ -24,6 +24,7 @@ class Listener(
     private val send: (Msg) -> Boolean,
     private val status: (String, Boolean) -> Unit,
     private val error: (String) -> Unit,
+    private val accountToken: String,
 ) : AutoCloseable {
     private data class Samples(val bytes: ByteArray, val rate: Int, val channels: Int, val epoch: Int)
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "iris-vad") }
@@ -137,8 +138,8 @@ class Listener(
                     .addFormDataPart("utterance_id", id)
                     .addFormDataPart("duration_ms", (pcm.size / 32).toString())
                     .addFormDataPart("audio", "$id.wav", Wav.encode(pcm).toRequestBody("audio/wav".toMediaType())).build()
-                http.newCall(Request.Builder().url("${address.http}/api/utterance").post(body).build()).execute().use {
-                    if (it.code != 202) error("Audio upload failed (HTTP ${it.code}); use Android STT if needed")
+                http.newCall(Request.Builder().url("${address.http}/api/utterance").header("Authorization", "Bearer $accountToken").post(body).build()).execute().use {
+                    if (it.code != 202) error(if (it.code == 501) "Speech transcription is not configured. Enable Android STT in Controls." else "Audio upload failed (HTTP ${it.code}); use Android STT if needed")
                 }
             } catch (e: Exception) { if (!closed) error("Audio upload failed; check hub connection") }
             finally { uploads.release() }

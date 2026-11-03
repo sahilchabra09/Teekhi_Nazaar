@@ -22,7 +22,7 @@ class SessionClient(
         job?.cancel()
         job = scope.launch {
             val url = "${address.http}/api/mobile/session".toHttpUrl().newBuilder().addQueryParameter("device_id", "esp12e_carbot").build()
-            if (settings.sessionToken.isBlank()) { revoke("Enter a backend session token in setup"); return@launch }
+            if (settings.accountToken.isBlank()) { revoke("Link your account before requesting robot authorization"); return@launch }
             if (!url.isHttps && !(settings.allowLocalSessionHttp && isLocalHost(url.host))) {
                 revoke("Session authorization requires HTTPS; local bench HTTP must be enabled explicitly")
                 return@launch
@@ -31,7 +31,7 @@ class SessionClient(
                 val start = SystemClock.elapsedRealtime()
                 try {
                     val response = withContext(Dispatchers.IO) {
-                        client.newCall(Request.Builder().url(url).header("Authorization", "Bearer ${settings.sessionToken}").build()).execute().use { result ->
+                        client.newCall(Request.Builder().url(url).header("Authorization", "Bearer ${settings.accountToken}").build()).execute().use { result ->
                             require(result.isSuccessful) { "Backend session unavailable (HTTP ${result.code})" }
                             val body = result.body ?: throw IllegalStateException("Empty session response")
                             val source = body.source()

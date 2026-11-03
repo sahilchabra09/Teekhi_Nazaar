@@ -69,7 +69,9 @@ class MainActivity : ComponentActivity() {
                                 Column(Modifier.padding(12.dp)) { Text(message); TextButton(onClick = model::clearError) { Text("Dismiss") } }
                             }
                         }
-                        ClayCard(Modifier.fillMaxWidth()) { Setup(model.initialSettings, ::start) }
+                        ClayCard(Modifier.fillMaxWidth()) {
+                            Setup(model.initialSettings, state.authBusy, model::link, model::signOut, ::start)
+                        }
                     }
                 }
             }
@@ -83,32 +85,47 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { model.background(); super.onPause() }
 }
 
-@Composable private fun Setup(initial: RobotSettings, start: (RobotSettings) -> Unit) {
+@Composable private fun Setup(initial: RobotSettings, busy: Boolean,
+    link: (String, String, Boolean) -> Unit, signOut: () -> Unit, start: (RobotSettings) -> Unit) {
     var hub by remember(initial) { mutableStateOf(initial.hub) }
     var robot by remember(initial) { mutableStateOf(initial.robotEnabled) }
     var broker by remember(initial) { mutableStateOf(initial.broker) }
     var esp by remember(initial) { mutableStateOf(initial.espPassword) }
-    var token by remember(initial) { mutableStateOf(initial.sessionToken) }
+    var code by remember { mutableStateOf("") }
     var username by remember(initial) { mutableStateOf(initial.brokerUser) }
     var password by remember(initial) { mutableStateOf(initial.brokerPassword) }
     var http by remember(initial) { mutableStateOf(initial.allowLocalSessionHttp) }
+    val paired = initial.accountToken.isNotBlank()
     Text("Your presence, anywhere.", fontSize = 27.sp, fontWeight = FontWeight.Bold)
     Text("Connect your phone and laptop to the same hotspot, then start a conversation.", color = Clay.Soft)
-    OutlinedTextField(hub, { hub = it }, label = { Text("Hub address") }, placeholder = { Text("192.168.1.10:3000") },
+    OutlinedTextField(hub, { hub = it }, label = { Text("Laptop backend address") }, placeholder = { Text("192.168.137.1:3000") }, enabled = !paired && !busy,
         singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
+    if (!paired) {
+        Text("Sign in with your IRIS account", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+        Text("Use Google or email to sign in on the laptop. Click Link phone in the console, then enter its code here. Both devices will use that same account.", color = Clay.Soft)
+        OutlinedTextField(code, { code = it.take(20) }, label = { Text("One-time sign-in code") },
+            placeholder = { Text("ABCD 1234 E567") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+        Toggle("Allow HTTP on my private laptop hotspot", http, !busy) { http = it }
+        if (http) Text("Local testing only. Your sign-in code and session travel without encryption. Use HTTPS on a shared network.", fontSize = 13.sp, color = Clay.Soft)
+        ClayButton(onClick = { link(hub, code, http); code = "" }, enabled = !busy && hub.isNotBlank() && code.filterNot { it.isWhitespace() || it == '-' }.length == 12,
+            modifier = Modifier.fillMaxWidth().height(64.dp)) { Text(if (busy) "Signing in…" else "Link my account", fontSize = 21.sp) }
+        return
+    }
+    Text("Signed in as", color = Clay.Soft, fontSize = 13.sp)
+    Text(initial.accountEmail, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+    Text("Only a laptop signed in to this account can connect to your camera and speech.", color = Clay.Soft, fontSize = 14.sp)
+    TextButton(onClick = signOut, enabled = !busy) { Text("Sign out / change account") }
+    HorizontalDivider()
     Toggle("Connect ESP robot controller", robot) { robot = it }
     if (robot) {
         OutlinedTextField(broker, { broker = it }, label = { Text("MQTT broker URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Secret("ESP control password", esp) { esp = it }
-        Secret("Backend session token", token) { token = it }
         OutlinedTextField(username, { username = it }, label = { Text("Broker username (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Secret("Broker password (optional)", password) { password = it }
-        Toggle("Allow session HTTP on a private LAN", http) { http = it }
-        if (http) Text("Bench testing only: your token travels without encryption. Use HTTPS for a protected deployment.", color = Clay.Soft, fontSize = 13.sp)
         Text("Mount upright: phone top up, screen facing the robot’s forward direction. Driving requires calibration, live ESP status, and an authorized backend session.", fontSize = 14.sp)
     }
-    ClayButton(onClick = { start(RobotSettings(hub, robot, broker, esp, username, password, token, http)) },
-        enabled = hub.isNotBlank(), modifier = Modifier.fillMaxWidth().height(64.dp)) { Text("Start IRIS", fontSize = 23.sp) }
+    ClayButton(onClick = { start(initial.copy(robotEnabled = robot, broker = broker, espPassword = esp, brokerUser = username, brokerPassword = password)) },
+        enabled = !busy, modifier = Modifier.fillMaxWidth().height(64.dp)) { Text(if (busy) "Checking account…" else "Start IRIS", fontSize = 23.sp) }
     Text("Camera and microphone are active during the session. IRIS stops when this app becomes inactive.", fontSize = 13.sp, color = Clay.Soft)
 }
 
@@ -182,6 +199,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Session controls", fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
+            Text(state.accountEmail, color = Clay.Teal, fontWeight = FontWeight.SemiBold)
             Text("Hub: ${state.hubLabel} · WebRTC: ${state.video}")
             state.error?.let { message ->
                 Card(colors = CardDefaults.cardColors(containerColor = Clay.Tomato.copy(alpha = .15f))) {
@@ -190,6 +208,7 @@ class MainActivity : ComponentActivity() {
             }
             SessionControls(state, model)
             OutlinedButton(onClick = { controls = false; model.stop() }, modifier = Modifier.fillMaxWidth()) { Text("End session") }
+            TextButton(onClick = { controls = false; model.signOut() }, modifier = Modifier.fillMaxWidth()) { Text("Sign out of this phone") }
         }
     }
 }

@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,7 +53,7 @@ object Clay {
 fun Modifier.clay(tone: Color = Clay.Surface, radius: Int = 28): Modifier {
     val shape = RoundedCornerShape(radius.dp)
     return shadow(12.dp, shape, ambientColor = Clay.Pine.copy(alpha = .16f), spotColor = Clay.Pine.copy(alpha = .22f))
-        .background(Brush.linearGradient(listOf(Color.White.copy(alpha = .95f), tone, tone, tone.copy(alpha = .85f))), shape)
+        .background(Brush.linearGradient(listOf(lerp(tone, Color.White, .35f), tone, tone, lerp(tone, Clay.Pine, .08f))), shape)
         .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = .95f), tone, Clay.Pine.copy(alpha = .08f))), shape)
 }
 
@@ -68,7 +69,8 @@ fun Modifier.clay(tone: Color = Clay.Surface, radius: Int = 28): Modifier {
     content: @Composable RowScope.() -> Unit,
 ) {
     Button(onClick = onClick, enabled = enabled,
-        modifier = modifier.shadow(if (enabled) 8.dp else 0.dp, RoundedCornerShape(24.dp), spotColor = tone.copy(alpha = .4f)),
-        colors = ButtonDefaults.buttonColors(containerColor = tone, contentColor = if (tone == Clay.Teal || tone == Clay.Tomato) Color.White else Clay.Pine),
+        modifier = modifier.clay(if (enabled) tone else Clay.MistDeep, 24),
+        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, disabledContainerColor = Color.Transparent,
+            contentColor = if (tone == Clay.Teal || tone == Clay.Tomato) Color.White else Clay.Pine),
         shape = RoundedCornerShape(24.dp), contentPadding = PaddingValues(horizontal = 22.dp, vertical = 16.dp), content = content)
 }

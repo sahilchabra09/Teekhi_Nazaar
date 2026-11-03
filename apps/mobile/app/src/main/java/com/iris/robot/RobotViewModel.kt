@@ -3,6 +3,7 @@ package com.iris.robot
 import android.app.Application
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.iris.robot.core.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -28,6 +29,8 @@ data class RobotUiState(
     val remoteTrack: VideoTrack? = null,
     val frontendVideoLive: Boolean = false,
     val eglContext: EglBase.Context? = null,
+    val accountEmail: String = "",
+    val authBusy: Boolean = false,
 )
 
 class RobotViewModel(application: Application) : AndroidViewModel(application) {
@@ -38,17 +41,62 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(error = "Saved credentials could not be read. Enter setup again.") }; RobotSettings()
     }; private set
     private var session: RobotSession? = null
+    private var authJob: Job? = null
+    init { mutable.update { it.copy(accountEmail = initialSettings.accountEmail) } }
     fun report(message: String) { mutable.update { it.copy(error = message) } }
     fun clearError() { mutable.update { it.copy(error = null) } }
+    fun link(hub: String, code: String, localHttp: Boolean) {
+        if (state.value.authBusy) return
+        mutable.update { it.copy(authBusy = true, error = null) }
+        authJob = viewModelScope.launch {
+            try {
+                val settings = initialSettings.copy(hub = hub.trim(), allowLocalSessionHttp = localHttp,
+                    accountToken = "", accountEmail = "", accountExpiresAt = 0)
+                val account = withContext(Dispatchers.IO) { AccountClient(settings).use { it.link(code) } }
+                ensureActive()
+                require(account.token.isNotBlank() && account.expires_at_ms > System.currentTimeMillis()) { "Invalid account authorization" }
+                val linked = settings.copy(accountToken = account.token, accountEmail = account.user.email, accountExpiresAt = account.expires_at_ms)
+                store.save(linked); initialSettings = linked
+                mutable.update { it.copy(accountEmail = account.user.email) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { report(e.message ?: "Could not sign in. Check your hotspot and laptop address.") }
+            finally { mutable.update { it.copy(authBusy = false) } }
+        }
+    }
+    private fun clearAccount(message: String? = null) {
+        stop()
+        val cleared = initialSettings.copy(accountToken = "", accountEmail = "", accountExpiresAt = 0)
+        initialSettings = cleared
+        runCatching { store.save(cleared) }.onFailure { report("Could not clear saved credentials. Clear IRIS app storage in Android settings.") }
+        mutable.update { it.copy(accountEmail = "", error = message ?: it.error) }
+    }
+    fun signOut() {
+        if (state.value.authBusy) return
+        val previous = initialSettings
+        clearAccount()
+        viewModelScope.launch(Dispatchers.IO) { runCatching { AccountClient(previous).use { it.logout() } } }
+    }
     fun start(settings: RobotSettings) {
-        if (session != null) return
-        try {
-            val address = HubAddress.parse(settings.hub)
-            store.save(settings); initialSettings = settings
-            mutable.value = RobotUiState(running = true)
-            session = RobotSession(getApplication(), settings, address) { transform -> mutable.update(transform) }
-            session!!.start()
-        } catch (e: Exception) { stop(); report(e.message ?: "Could not start IRIS") }
+        if (session != null || state.value.authBusy) return
+        mutable.update { it.copy(authBusy = true, error = null) }
+        authJob = viewModelScope.launch {
+            try {
+                require(settings.hub == initialSettings.hub && settings.accountToken == initialSettings.accountToken) { "Link this backend before starting IRIS" }
+                val address = HubAddress.parse(settings.hub)
+                val account = withContext(Dispatchers.IO) { AccountClient(settings).use { it.me() } }
+                ensureActive()
+                val verified = settings.copy(accountEmail = account.user.email, accountExpiresAt = account.expires_at_ms)
+                store.save(verified); initialSettings = verified
+                mutable.value = RobotUiState(running = true, accountEmail = account.user.email)
+                session = RobotSession(getApplication(), verified, address,
+                    { clearAccount("Your account connection ended. Link again from your laptop.") },
+                    { transform -> mutable.update(transform) })
+                session!!.start()
+            } catch (e: CancellationException) { throw e }
+            catch (e: AccountExpired) { clearAccount(e.message) }
+            catch (e: Exception) { stop(); report(e.message ?: "Could not start IRIS") }
+            finally { mutable.update { it.copy(authBusy = false) } }
+        }
     }
     fun stop() {
         session?.close(); session = null
@@ -56,6 +104,7 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
             activeSpeech = false, listening = "Stopped", remoteTrack = null, frontendVideoLive = false, eglContext = null, enabled = false) }
     }
     fun background() {
+        authJob?.cancel()
         if (session != null) { stop(); report("IRIS stopped while inactive. Tap Start IRIS to resume.") }
     }
     fun tap() { session?.tap() }
@@ -71,6 +120,7 @@ private class RobotSession(
     private val context: Application,
     private val settings: RobotSettings,
     private val address: HubAddress,
+    private val unauthorized: () -> Unit,
     private val update: ((RobotUiState) -> RobotUiState) -> Unit,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -97,10 +147,10 @@ private class RobotSession(
             controller.backendConnectivity(connected)
             change { it.copy(hub = connected, hubLabel = label) }
             if (!connected) { mqtt?.stopOutput(); rtc.peerAvailable(false); change { it.copy(web = false) } }
-        }, ::message)
+        }, ::message, settings.accountToken, unauthorized)
         listener = Listener(context, address, scope, hub::send, { label, active ->
             change { if (it.speaking || it.androidStt) it else it.copy(listening = label, activeSpeech = active) }
-        }, ::error)
+        }, ::error, settings.accountToken)
         recognizer = AndroidRecognizer(context, hub::send, { label, active ->
             change { if (it.speaking) it else it.copy(listening = label, activeSpeech = active) }
         }, ::error)

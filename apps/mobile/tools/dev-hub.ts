@@ -33,6 +33,9 @@ export function startDevHub(options: { port?: number; hostname?: string; session
         return new Response("WebSocket required", { status: 426 });
       }
       if (url.pathname === "/health") return Response.json({ mode: "mock", uploads, phone: peers.has("phone"), web: peers.has("web") });
+      // Protocol tests only. This is intentionally not an account credential and is
+      // never used by the native app's account-link flow or the main API.
+      if (url.pathname === "/api/mobile/web-ticket" && request.method === "POST") return Response.json({ ticket: "mock-protocol-test" });
       if (url.pathname === "/api/mobile/session" && request.method === "GET") {
         if (!options.sessionToken) return Response.json({ error: "Bench session disabled" }, { status: 501 });
         if (request.headers.get("Authorization") !== `Bearer ${options.sessionToken}`) return new Response("Unauthorized", { status: 401 });

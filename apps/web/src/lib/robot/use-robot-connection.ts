@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createApplicationHub, hubWebSocketUrl } from "../hub/client";
+import { createApplicationHub } from "../hub/client";
 import type { ApplicationHub, HubState } from "../hub/client";
 import { useRobotStream } from "../rtc";
 
@@ -27,6 +27,12 @@ export function useRobotConnection() {
     };
   }, []);
   useEffect(() => hub?.on("peer_status", (message) => setPhone(message.phone === true)), [hub]);
+  useEffect(() => {
+    if (status !== "unauthorized" && status !== "replaced") return;
+    epoch.current++;
+    resources.current.camera?.getTracks().forEach((track) => track.stop());
+    resources.current.camera = undefined; setCamera(undefined); setCameraBusy(false); setPhone(false);
+  }, [status]);
 
   const openCamera = useCallback(async () => {
     if (resources.current.camera?.getVideoTracks().some((track) => track.readyState === "live")) return;
@@ -54,7 +60,6 @@ export function useRobotConnection() {
     try {
       const next = createApplicationHub(address, (value) => { if (mounted.current) setStatus(value); });
       resources.current.hub = next; setHub(next);
-      try { localStorage.setItem("iris-media-hub", hubWebSocketUrl(address).toString()); } catch { /* Optional persistence. */ }
       void openCamera();
     } catch (cause) {
       resources.current.hub = undefined; setHub(null); setStatus("disconnected");
