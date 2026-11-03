@@ -19,7 +19,7 @@ data class RobotUiState(
     val listening: String = "Ready",
     val activeSpeech: Boolean = false,
     val speaking: Boolean = false,
-    val caption: String = "Hello. I’m IRIS.",
+    val caption: String = "",
     val jpeg: Boolean = false,
     val androidStt: Boolean = false,
     val sttReady: Boolean = true,
@@ -144,7 +144,7 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun background() {
         authJob?.cancel()
-        if (session != null) { stop(); report("IRIS stopped while inactive. Tap Start IRIS to resume.") }
+        if (session != null) { stop(); report("Session ended while IRIS was in the background.") }
     }
     fun tap() { session?.tap() }
     fun modes(jpeg: Boolean, androidStt: Boolean) { session?.modes(jpeg, androidStt) }

@@ -71,7 +71,7 @@ class Listener(
                     if (offset < bytes.size) pending.write(bytes, offset, bytes.size - offset)
                 }
             } catch (e: Exception) {
-                if (!closed) error("Speech detector unavailable; use Android STT fallback")
+                if (!closed) error("Speech detection is unavailable. Turn on phone speech recognition in Settings.")
             } finally { vad?.close(); vad = null }
         }
     }
@@ -139,7 +139,7 @@ class Listener(
                     .addFormDataPart("duration_ms", (pcm.size / 32).toString())
                     .addFormDataPart("audio", "$id.wav", Wav.encode(pcm).toRequestBody("audio/wav".toMediaType())).build()
                 http.newCall(Request.Builder().url("${address.http}/api/utterance").header("Authorization", "Bearer $accountToken").post(body).build()).execute().use {
-                    if (it.code != 202) error(if (it.code == 501) "Speech transcription is not configured. Enable Android STT in Controls." else "Audio upload failed (HTTP ${it.code}); use Android STT if needed")
+                    if (it.code != 202) error(if (it.code == 501) "Transcription is unavailable. Turn on phone speech recognition in Settings." else "Audio could not be sent (HTTP ${it.code}). Check your connection.")
                 }
             } catch (e: Exception) { if (!closed) error("Audio upload failed; check hub connection") }
             finally { uploads.release() }
