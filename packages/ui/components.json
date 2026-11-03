@@ -1,0 +1,24 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "base-lyra",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/styles/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@Teekhi_Nazaar/ui/components",
+    "utils": "@Teekhi_Nazaar/ui/lib/utils",
+    "hooks": "@Teekhi_Nazaar/ui/hooks",
+    "lib": "@Teekhi_Nazaar/ui/lib",
+    "ui": "@Teekhi_Nazaar/ui/components"
+  },
+  "menuColor": "default",
+  "menuAccent": "subtle",
+  "registries": {}
+}
