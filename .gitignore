@@ -64,4 +64,4 @@ __pycache__/
 *.py[cod]
 
 # local test accounts (contain passwords)
-packages/db/seed/test-user.json
+packages/db/seed/*.json
