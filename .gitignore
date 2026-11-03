@@ -6,6 +6,8 @@ node_modules
 # Build outputs
 dist
 build
+.next/
+out/
 *.tsbuildinfo
 
 # Generated files
@@ -16,6 +18,9 @@ local.db-*
 # Environment variables
 .env
 .env*.local
+.env.production
+.env.development
+.env.test
 
 # IDEs and editors
 .vscode/*
@@ -58,6 +63,17 @@ tmp
 temp
 
 # ESP8266 / uv tooling
+.tooling/
+apps/mobile/.gradle/
+apps/mobile/.kotlin/
+apps/mobile/local.properties
+apps/mobile/captures/
+apps/mobile/**/*.apk
+apps/mobile/**/*.jks
+apps/mobile/**/*.keystore
+apps/mobile/**/.cxx/
+apps/mobile/**/.externalNativeBuild/
+apps/mobile/tools/uploads/
 .venv/
 .platformio/
 __pycache__/
