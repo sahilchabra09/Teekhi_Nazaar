@@ -1,1 +1,217 @@
 @import "@Teekhi_Nazaar/ui/globals.css";
+
+/* ───────────────────────── IRIS clay tokens ─────────────────────────
+   Palette drawn from real iris colours: pine (pupil-dark green),
+   teal (iris), honey (amber flecks), sky (blue iris), on a pale mint. */
+:root {
+  --mist: #dcebe4;
+  --mist-deep: #c9ded5;
+  --surface: #edf6f1;
+  --pine: #123832;
+  --pine-soft: #4a6862;
+  --teal: #22786a;
+  --teal-light: #3fa391;
+  --honey: #f4b23e;
+  --honey-deep: #d98f12;
+  --sky: #8ec5dd;
+  --tomato: #e4553f;
+
+  /* clay shadows on the mist background */
+  --clay-drop: 18px 20px 40px rgb(30 78 68 / 0.2), -12px -12px 28px rgb(255 255 255 / 0.8);
+  --clay-drop-sm: 8px 10px 20px rgb(30 78 68 / 0.18), -6px -6px 14px rgb(255 255 255 / 0.75);
+  --clay-inner: inset -8px -10px 18px rgb(18 56 50 / 0.08), inset 8px 10px 16px rgb(255 255 255 / 0.9);
+  --clay-pressed: inset 6px 8px 14px rgb(18 56 50 / 0.16), inset -6px -6px 12px rgb(255 255 255 / 0.85);
+
+  /* shadcn tokens mapped onto the palette (sonner, inputs, focus rings) */
+  --background: var(--mist);
+  --foreground: var(--pine);
+  --card: var(--surface);
+  --card-foreground: var(--pine);
+  --popover: var(--surface);
+  --popover-foreground: var(--pine);
+  --primary: var(--teal);
+  --primary-foreground: #ffffff;
+  --muted: var(--mist-deep);
+  --muted-foreground: var(--pine-soft);
+  --border: rgb(18 56 50 / 0.12);
+  --input: rgb(18 56 50 / 0.12);
+  --ring: var(--honey);
+  --radius: 1.25rem;
+}
+
+@theme inline {
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-bricolage), var(--font-figtree), ui-sans-serif, sans-serif;
+  --color-mist: var(--mist);
+  --color-mist-deep: var(--mist-deep);
+  --color-surface: var(--surface);
+  --color-pine: var(--pine);
+  --color-pine-soft: var(--pine-soft);
+  --color-teal: var(--teal);
+  --color-teal-light: var(--teal-light);
+  --color-honey: var(--honey);
+  --color-honey-deep: var(--honey-deep);
+  --color-sky: var(--sky);
+  --color-tomato: var(--tomato);
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--mist);
+    color: var(--pine);
+  }
+  :focus-visible {
+    outline: 3px solid var(--honey);
+    outline-offset: 3px;
+  }
+}
+
+/* ───────────────────────── clay primitives ───────────────────────── */
+@layer components {
+  /* raised slab: cards, panels, the camera bezel */
+  .clay {
+    background: var(--surface);
+    box-shadow: var(--clay-drop), var(--clay-inner);
+  }
+  .clay-sm {
+    background: var(--surface);
+    box-shadow: var(--clay-drop-sm), var(--clay-inner);
+  }
+  /* pressed-in well: inputs, segmented control track */
+  .clay-well {
+    background: var(--mist);
+    box-shadow: var(--clay-pressed);
+  }
+
+  /* coloured clay (side cards, shapes). Set --tone and --tone-shadow. */
+  .clay-tone {
+    background: var(--tone);
+    box-shadow:
+      12px 16px 30px var(--tone-shadow),
+      -8px -8px 20px rgb(255 255 255 / 0.7),
+      inset -10px -12px 20px rgb(0 0 0 / 0.16),
+      inset 10px 12px 18px rgb(255 255 255 / 0.38);
+  }
+  .tone-teal {
+    --tone: var(--teal);
+    --tone-shadow: rgb(34 120 106 / 0.38);
+  }
+  .tone-honey {
+    --tone: var(--honey);
+    --tone-shadow: rgb(217 143 18 / 0.38);
+  }
+  .tone-sky {
+    --tone: var(--sky);
+    --tone-shadow: rgb(70 140 175 / 0.38);
+  }
+  .tone-pine {
+    --tone: var(--pine);
+    --tone-shadow: rgb(18 56 50 / 0.4);
+  }
+  .tone-tomato {
+    --tone: var(--tomato);
+    --tone-shadow: rgb(228 85 63 / 0.38);
+  }
+
+  /* clay sphere used by background shapes */
+  .clay-ball {
+    background: radial-gradient(
+      circle at 32% 28%,
+      rgb(255 255 255 / 0.75) 0%,
+      var(--tone) 34%,
+      color-mix(in oklab, var(--tone), black 22%) 100%
+    );
+    box-shadow: 14px 20px 34px var(--tone-shadow);
+  }
+
+  .clay-press {
+    transition:
+      transform 160ms cubic-bezier(0.3, 0.7, 0.4, 1.4),
+      box-shadow 160ms ease;
+  }
+  .clay-press:active {
+    transform: scale(0.97) translateY(2px);
+  }
+}
+
+/* ───────────────────────── motion ───────────────────────── */
+@keyframes clay-pop {
+  0% {
+    opacity: 0;
+    transform: translate(var(--x, 0), var(--y, 0)) scale(0.4) rotate(var(--r, 0deg));
+  }
+  70% {
+    opacity: 1;
+    transform: translate(var(--x, 0), var(--y, 0)) scale(1.06) rotate(var(--r, 0deg));
+  }
+  100% {
+    opacity: 1;
+    transform: translate(var(--x, 0), var(--y, 0)) scale(1) rotate(var(--r, 0deg));
+  }
+}
+@keyframes clay-drift {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -14px;
+  }
+}
+@keyframes dwell-fill {
+  from {
+    clip-path: inset(100% 0 0 0 round 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0 round 0);
+  }
+}
+@keyframes speak-bar {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@keyframes listen-ping {
+  0% {
+    box-shadow: 0 0 0 0 rgb(244 178 62 / 0.6);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgb(244 178 62 / 0);
+  }
+}
+
+.shape-pop {
+  animation:
+    clay-pop 900ms cubic-bezier(0.3, 0.7, 0.4, 1.2) both,
+    clay-drift var(--drift, 9s) ease-in-out 900ms infinite;
+  animation-delay: var(--delay, 0ms), calc(var(--delay, 0ms) + 900ms);
+}
+
+/* gaze / mouse dwell progress: honey fill rising inside a target */
+.dwell-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgb(255 255 255 / 0.32);
+  pointer-events: none;
+  clip-path: inset(100% 0 0 0);
+}
+[data-dwelling="true"] > .dwell-fill {
+  animation: dwell-fill var(--dwell-ms, 900ms) linear forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shape-pop {
+    animation: none;
+    transform: translate(var(--x, 0), var(--y, 0)) rotate(var(--r, 0deg));
+  }
+  .speak-bar,
+  .listen-dot {
+    animation: none !important;
+  }
+}
