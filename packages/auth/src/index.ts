@@ -35,6 +35,13 @@ export function createAuth(
     }),
     trustedOrigins: [env.CORS_ORIGIN, ...desktopOrigins],
     emailAndPassword: { enabled: true },
+    user: {
+      additionalFields: {
+        // RBAC: "patient" | "doctor". input:false → can't be set during sign-up; the user picks it
+        // once afterwards through POST /api/me/role (apps/server/src/routes/me.ts).
+        role: { type: "string", required: false, input: false },
+      },
+    },
     socialProviders,
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
