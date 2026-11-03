@@ -4,8 +4,8 @@
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/web/`, `apps/server/`, `packages/` | Authenticated web console and server workspace. The console is linked to phone media/conversation through a configurable hub; production hub/STT and MQTT publisher/session authorization remain integration work. |
-| `apps/mobile/` | Native IRIS Android app, shared Kotlin protocol/audio/controller core, mock hub, tests and backend handoff. The MQTT phone controller is implemented; production backend session integration and physical-device validation remain. |
+| `apps/web/`, `apps/server/`, `packages/` | Better Auth web console and API, account-bound phone sign-in codes and authenticated media relay. STT/AI suggestions and robot ownership/MQTT publisher grants remain integration work. |
+| `apps/mobile/` | Native IRIS Android companion with the frontend's clay styling, shared account sign-in, secure credential storage, Kotlin protocol/audio/controller core and device checklist. The development mock is an isolated protocol-test fixture. |
 | `bot/src/main.cpp` | ESP-12E firmware for motor/servo control and Wi-Fi provisioning, without IR sensors. |
 | `bot/platformio.ini` | Board, framework, library dependencies, serial speeds, and Apple Silicon compiler configuration. |
 | `pyproject.toml`, `uv.lock` | Independent uv-managed PlatformIO tooling; the Bun workspace continues to manage the web/server apps. |

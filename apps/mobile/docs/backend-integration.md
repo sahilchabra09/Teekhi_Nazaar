@@ -4,18 +4,34 @@
 
 The authenticated console at `/` uses `useRobotConnection` and the shared `createApplicationHub` adapter. Its main feed is the phone's video/audio, with a separate local-webcam preview sent to the phone. It consumes `speech_activity`, `transcript`, `suggestions`, and matching `tts_status`; speaking completes on the phone's result, not a simulated timer. New suggestions queue while a reply is being confirmed/spoken. A replacement connection stops the previous browser from automatically stealing the single web role back.
 
-`NEXT_PUBLIC_SERVER_URL` continues to point to the existing auth API. An optional `NEXT_PUBLIC_ROBOT_HUB_URL` or the console's editable Media hub field selects the media service independently. Until the production hub exists, run the mock with `PORT=3002`, connect the console to `http://localhost:3002`, and the phone to `<laptop LAN IP>:3002`. Keep the auth server on its existing port. Do not run the mock on top of the authentication service.
+`NEXT_PUBLIC_SERVER_URL` points to the **same** Better Auth and media API (normally port 3000). The independent media URL override has been removed. On the phone, use that server's LAN IP or HTTPS hostname. See the [first-run instructions](../README.md#first-run).
 
-The production backend still needs authenticated/scoped WebSocket routing, STT, and controller/session authorization. The development hub is unauthenticated and simulates transcripts/suggestions. Browser login alone does not make that development media transport secure. Production adapters must bind/validate `device_id` and `control_session_id` from authorized backend session state; the current development compatibility events do not invent grants or treat role labels as authentication.
+The backend now authenticates both roles and isolates rooms by the user ID obtained from Better Auth. STT/AI suggestions, robot ownership, MQTT intention publishing and controller leases remain integration work. Pairing an account does not grant motor control. The unauthenticated development hub is only a test fixture.
+
+## Implemented account authorization
+
+| Route | Authorization and behavior |
+| --- | --- |
+| `POST /api/mobile/link-code` | Live Better Auth browser cookie and exact trusted Origin; issues a one-use 12-hex-character code for five minutes. Regeneration invalidates the previous code from that laptop session. |
+| `POST /api/mobile/link` | Native client exchanges the code for a random credential and verified user identity. Ten attempts per minute per direct client IP; no caller-supplied forwarded IP is trusted. |
+| `POST /api/mobile/web-ticket` | Live browser session and trusted Origin; issues a one-use WebSocket ticket valid for 30 seconds. |
+| `GET /api/mobile/me` | Native bearer credential; revalidates its parent Better Auth session. |
+| `POST /api/mobile/logout` | Native bearer credential; revokes it and closes its active socket. |
+| `GET /ws?role=phone` | Native bearer Authorization header; user identity determines the room. |
+| `GET /ws?role=web&ticket=…` | Trusted browser Origin and consumed ticket; user identity determines the room. |
+
+Phone credentials last at most 24 hours, never beyond the parent session. Laptop sign-out invalidates the phone; active sockets check their parent session every 15 seconds and close on invalidation or validation failure. A new link from the same laptop session invalidates its previous phone credential. Replaced roles close with 4001; account revocation closes with 1008. Clients stop retrying these terminal failures.
+
+Codes, credentials and tickets are retained only as hashes in a bounded, expiring in-memory store; parent session cookies remain server-side for Better Auth revalidation. API restart requires linking again. Multiple API instances require a shared atomic TTL store before deployment. Mobile JSON endpoints are size-limited and return `Cache-Control: no-store`. No request URL logger records WebSocket tickets. The relay limits payload size, per-peer message rate and queued output, and permits only role-appropriate media/speech events. It never relays a `drive_intent`. Client-provided account IDs do not select a room. Confirmed `speak` uses device TTS; arbitrary audio URLs are not accepted from the browser.
 
 ## Existing media/conversation contract
 
-Implement the routes from `docs/interfaces.md` in the production Hono/Bun server:
+Current implementation and remaining service integration:
 
 | Route | Phone behavior | Backend behavior required |
 | --- | --- | --- |
-| `GET /ws?role=phone` | Sends `hello`, reconnects with jittered 0.5–30 second backoff | Upgrade WebSocket, one peer per role, send `peer_status` immediately and after changes |
-| `POST /api/utterance` | Multipart WAV in `audio`, ID in `utterance_id`, length in `duration_ms` | Return **202 `{ "ok": true }`**, then emit `transcript` and `suggestions` asynchronously to web |
+| `GET /ws?role=phone` | Authenticated `hello`; jittered 0.5–30 second reconnect for temporary failures | Implemented: authenticated upgrade, one peer per account/role, initial and updated `peer_status` |
+| `POST /api/utterance` | Authenticated multipart WAV in `audio`, ID in `utterance_id`, length in `duration_ms` | Currently **501**, explicitly unconfigured. When STT is connected, return **202 `{ "ok": true }`**, then emit real `transcript` and `suggestions` asynchronously to the same account's web peer. |
 
 Kotlin sealed-message discriminator is exactly `type`; every modeled message includes epoch-millisecond `ts`. Unknown/malformed message types are ignored. Phone messages are implemented in `core/.../Protocol.kt`.
 
@@ -24,6 +40,8 @@ Relay phone `rtc_offer`, `rtc_ice`, `frame`, `speech_activity`, `tts_status`, fa
 The phone always offers, including after hub reconnect. Relay web `media_ready` to the phone for a fresh offer after the console's listeners are installed. Legacy peer-presence startup remains supported. The web client must receive `peer_status.phone:false` on disconnect so its hook can release stale media. Only the web user confirmation flow may create `speak`; the mobile app does not choose replies.
 
 ## Additional controller lease endpoint — proposed, must be implemented by backend
+
+The route exists but currently returns **401** without a valid account credential and **501** for linked phones. It does not mint a drive grant from media pairing.
 
 `GET /api/mobile/session?device_id=esp12e_carbot`
 

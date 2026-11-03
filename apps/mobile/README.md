@@ -1,6 +1,6 @@
 # IRIS Android robot app
 
-Native Kotlin / Jetpack Compose implementation of [mobile.md](../../docs/mobile.md), with the phone-side MQTT controller from [robot-operation.md](../../docs/robot-operation.md). The Android Studio project lives here, rather than the older `mobile/` path mentioned in the team plan.
+Native Kotlin / Jetpack Compose implementation of [mobile.md](../../docs/mobile.md), with the phone-side MQTT controller from [robot-operation.md](../../docs/robot-operation.md). Its mint, pine, teal, honey and sky palette, softly shaded cards and raised buttons match the main frontend's clay styling. The Android Studio project lives here.
 
 ## Build and install
 
@@ -25,37 +25,30 @@ The debug APK is signed automatically for local installation. Credentials, SDK p
 
 ## First run
 
-1. Put laptop and phone on the same hotspot. Allow inbound TCP port 3000 on the laptop.
-2. Enter the **laptop's LAN IP**, such as `192.168.1.10:3000`. `localhost` on a phone refers to the phone itself. Explicit `http://`, `https://`, `ws://` and `wss://` URLs are supported.
-3. Tap **Start IRIS** and grant camera/microphone permissions. The foreground screen stays awake.
-4. Sign in to the main web console at `/`. Enter the matching **Media hub** address and click **Connect phone**, then allow laptop camera access. The main web feed shows the phone camera; the small **Your camera → phone** preview is what the mounted phone displays. Received robot audio starts muted; click **Enable audio** when wanted. Use one connected console tab because the hub permits one web role.
-5. Say a sentence or use **Tap to talk** (tap again to send). Transcripts and suggestions from the hub appear in the console. Choose a quick phrase or suggestion, then **Speak it**; the console waits for the matching phone `tts_status` before completing the speaking view.
+1. Run the API and frontend from the repository root, in separate terminals: `bun run --cwd apps/server dev` and `bun run --cwd apps/web dev`. Keep server credentials in ignored `apps/server/.env`; set `NEXT_PUBLIC_SERVER_URL=http://localhost:3000` in ignored `apps/web/.env.local`. The API's `CORS_ORIGIN` must be `http://localhost:3001` for this setup.
+2. Connect the phone to the laptop's hotspot. The API listens on `0.0.0.0:3000`; allow inbound TCP 3000 if the firewall blocks it. Open `http://<laptop IP>:3000/health` in the phone browser to confirm reachability. On the current Windows hotspot, the laptop address is commonly `192.168.137.1`; check `ipconfig` if it changes.
+3. On the laptop, open `http://localhost:3001/`, sign in with **Google or email**, and click **Link phone**. This generates a 12-character code that expires in five minutes and can be used once.
+4. On Android, enter the **laptop backend address**, such as `192.168.137.1:3000`, and the code. For this private-hotspot HTTP test, explicitly enable **Allow HTTP on my private laptop hotspot**. Use HTTPS for deployment. Tap **Link my account** and check the displayed email matches the laptop account. `localhost` on the phone refers to the phone itself.
+5. Tap **Start IRIS** and grant camera/microphone access. On the laptop, click **Connect phone** and allow camera access. Both sides use the real API on port 3000. The web console shows the phone camera; its **Your camera → phone** preview is displayed on the phone. Click **Enable audio** to hear received phone audio.
+6. In the console, select **Say something**, choose a phrase, and confirm **Speak it**. Verify the phone speaks and the console waits for matching `tts_status`. Android STT can send real transcripts from phone Controls; server-side WAV transcription and AI suggestions are still unconfigured and return an explicit 501 rather than fake replies.
 
 The app stops and releases camera, microphone, sensors and robot control when its Activity pauses. Return and tap Start to resume. Hub reconnects while the app remains active; motor control always needs a new explicit Enable after faults/reconnects.
 
 The active phone screen prioritizes the **frontend camera**, with captions and Tap to talk below it. Before frames arrive, or if they stop arriving, it shows an explicit waiting/connection message. Open **Controls** for fallbacks, robot pairing/calibration/session actions, and End session. Robot STOP remains accessible at the top of the main screen when the controller is configured. The frontend camera needs WebRTC; JPEG/Android STT fallback modes currently support only robot-to-frontend video.
 
-## Test before the backend is ready
+## Account linking and sign-out
 
-The production server currently provides authentication, but does not yet provide the media hub/STT endpoints. For the main console, keep that auth server running on port 3000 with its configured database. Run this independent mock on **3002** so it does not collide with login:
+The phone uses the exact Better Auth account already signed in on the laptop. The one-time code is a device sign-in flow, so Google users do not need a separate password on Android. The API determines the user identity; role labels and client-supplied user IDs cannot select another account's media room. One phone and one console can connect per account; another connection replaces the old role.
 
-```powershell
-$env:PORT = "3002"
-bun run --cwd apps/mobile dev:hub
-# In another terminal:
-$env:NEXT_PUBLIC_ROBOT_HUB_URL = "http://localhost:3002"
-bun run --cwd apps/web dev
-```
+The phone credential is stored in Android Keystore-encrypted settings. It expires after at most 24 hours and depends on the originating laptop session remaining valid. **Sign out** on the laptop revokes that link; active sockets revalidate at least every 15 seconds. **Sign out** on the phone revokes its credential and clears local credentials without logging out the laptop. **End session** releases camera/microphone while preserving the account link.
 
-Open `http://localhost:3001/`, sign in normally, and connect its **Media hub** to `http://localhost:3002`. Set the phone hub to the laptop LAN address on **3002** (for the Windows hotspot, commonly `192.168.137.1:3002`). Allow that port through the laptop firewall. Authentication still uses `NEXT_PUBLIC_SERVER_URL`; the media setting does not replace it. The console also saves the chosen media address locally.
+Pairing state is intentionally in memory for this single-process API: restarting it requires a new code. A deployment with multiple workers needs a shared expiring store with atomic code/ticket consumption. Browser WebSockets use a single-use 30-second ticket; the native socket uses an Authorization header. Long-lived phone credentials are never placed in socket URLs.
 
-The development hub handles one socket per role, `media_ready`, signaling, speech events and WAV uploads. Returned transcripts are explicitly prefixed **[MOCK]**; it has no real transcription or LLM. Use the main authenticated console for frontend checks. The console's Driving card reports unavailable until a real authorized MQTT publisher/session is connected; media does not arm driving.
-
-Mock session grants are disabled by default. For controller bench testing only, set `ENABLE_BENCH_SESSION=1` and `MOCK_SESSION_TOKEN` in that terminal before starting the mock. Enter the same token on the phone and explicitly enable private-LAN session HTTP. The mock grants a ten-second renewable bench session; it **never publishes drive intentions**. A real backend must implement ownership and authentication before driving outside the bench setup.
+`tools/dev-hub.ts` remains an isolated, unauthenticated protocol-test fixture for Bun tests. The app's account flow and main frontend do not use it. `NEXT_PUBLIC_ROBOT_HUB_URL` and the editable media-hub field have been removed. No mock frontend is installed.
 
 ## Robot pairing and control
 
-Enable **Connect ESP robot controller** on setup, enter the ESP's current control password, broker URL, optional broker credentials, and backend token. Settings are encrypted with an Android Keystore AES-GCM key; backup is disabled. No control grant or cached movement is persisted.
+After account linking, enable **Connect ESP robot controller** on setup and enter the ESP's current control password, broker URL and optional broker credentials. The account credential is attached automatically to session requests. Settings are encrypted with an Android Keystore AES-GCM key; backup is disabled. No control grant or cached movement is persisted. Account linking authorizes media only: `/api/mobile/session` returns 501 until robot ownership and MQTT publishing are configured, so driving remains disarmed.
 
 Use the current ESP's exact topics and envelope:
 
@@ -81,7 +74,7 @@ The default public broker matches the existing firmware's bench configuration. P
 
 ## Backend and web handoff
 
-See [backend-integration.md](docs/backend-integration.md) for exact routes, authorization lease shape, failure behavior and hook usage. Media/speech messages retain the shared `interfaces.md` contract. The new controller lease endpoint and optional revocation message are proposed integration additions, not endpoints already available in `apps/server`.
+See [backend-integration.md](docs/backend-integration.md) for implemented account/media routes and the remaining controller lease and speech-service contracts. Media/speech messages retain the shared `interfaces.md` contract.
 
 ## Verification
 
@@ -90,6 +83,9 @@ See [backend-integration.md](docs/backend-integration.md) for exact routes, auth
 bun run --cwd apps/mobile test
 bun run --cwd apps/mobile check-types
 bun run --cwd apps/web check-types
+bun run --cwd apps/web test
+bun run --cwd apps/server test
+bun run --cwd apps/server check-types
 ```
 
 `core` contains JVM tests for clock/freshness, session/target validation, duplicate suppression, heading control, stop/disarm behavior, audio resampling, utterance boundaries and protocol handling. Bun tests exercise the mock's real WebSockets/HTTP and the browser's negotiation/cleanup state machine. These checks do not replace device tests.

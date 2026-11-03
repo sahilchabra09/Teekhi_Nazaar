@@ -6,7 +6,7 @@ The [robot operation and team integration guide](docs/robot-operation.md) explai
 
 Movement uses MQTT: frontend/backend intentions → mounted phone with gyro correction → ESP8266 wheel commands. Other application traffic uses WebSocket between frontend ↔ backend ↔ mobile. The [team plan](docs/PLAN.md) and [shared interfaces](docs/interfaces.md) follow this architecture.
 
-The native Kotlin [IRIS Android app](apps/mobile/README.md) includes robot camera/audio streaming, speech playback and capture, motion sensing, and the phone-side MQTT controller. The main authenticated web console connects to the phone for media and conversation. Its [backend handoff](apps/mobile/docs/backend-integration.md) documents the production routes still needed; a standalone development hub supports local integration checks while those routes are being built.
+The native Kotlin [IRIS Android app](apps/mobile/README.md) matches the web console's clay UI and includes camera/audio streaming, speech playback and capture, motion sensing, and the phone-side MQTT controller. Sign in on the laptop with Google/email, click **Link phone**, and enter the one-time code on Android. Both devices use the same Better Auth account and authenticated API; media is isolated by account. Its [backend handoff](apps/mobile/docs/backend-integration.md) documents implemented pairing/media routes and remaining STT, robot ownership and MQTT publisher work.
 
 This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines Next.js, Hono, and more.
 

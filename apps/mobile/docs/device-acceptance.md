@@ -4,7 +4,10 @@ Automated compilation/tests are separate from these hardware checks. Record actu
 
 | Check | Procedure | Actual result / measurement |
 | --- | --- | --- |
-| Fresh install | Enter LAN hub address; grant both permissions; start | Pending |
+| Fresh install | Sign in on laptop, generate Link phone code; enter LAN backend address and code on phone; check matching email; grant both permissions and start | Pending |
+| Clay UI | Check mint background, raised rounded cards and shaded teal/honey buttons; inspect setup, camera waiting view and Controls at large Android font size | Pending |
+| Account isolation | Use a second laptop account; verify it cannot see this phone or send it speech | Automated relay checks pass; physical test pending |
+| Account revocation | Sign out on laptop; verify phone stops within 15 seconds and needs a new code. Phone sign-out must leave laptop signed in. | Automated checks pass; physical test pending |
 | Camera and audio | Phone video/audio arrives in the main web console; wave to measure delay | Pending; target video start <3 s and delay <0.5 s |
 | Frontend camera on phone | Connect the main console, grant camera access, verify webcam preview and main phone video; disconnect/disable the frontend camera and verify waiting state | Pending |
 | Speech playback | Send queued speech twice; hear loudspeaker in a noisy room; verify one started/finished pair per ID | Pending; target first playback <1 s |
