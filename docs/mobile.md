@@ -1,10 +1,15 @@
 # Mounted Android app contract
 
-**Owner:** Harnoor. **Paths:** planned Kotlin/Android project under `apps/mobile/`, planned browser media hook under `apps/web/src/lib/rtc/`, and demo materials under `pitch/`.
+**Owner:** Harnoor · **Code:** `apps/mobile/` (Android Studio project), `apps/web/src/lib/rtc/` (laptop-side video hook), `pitch/`
+**Depends on:** [interfaces.md](./interfaces.md) · **Overview:** [PLAN.md](./PLAN.md)
 
-The phone is fixed to the robot chassis and owns the local movement controller. It receives MQTT intentions from frontend/backend, uses its orientation and gyro feedback to calculate signed wheel effort, and publishes the existing ESP8266 envelope. It also connects to the backend over WebSocket for session/conversation/media events and provides the camera, microphone, and speaker for telepresence. This is an implementation contract; the repository currently contains a mobile placeholder, not a completed app.
+The phone is fixed to the robot chassis and owns the local movement controller. It receives MQTT intentions from frontend/backend, uses its orientation and gyro feedback to calculate signed wheel effort, and publishes the existing ESP8266 envelope. It also connects to the backend over WebSocket for session/conversation/media events and provides the camera, microphone, and speaker for telepresence. The Kotlin app is implemented under apps/mobile; backend session authorization and physical-device acceptance remain integration work.
 
 Use [robot operation](robot-operation.md) for calibration, correction math, timing, and password handling; [shared interfaces](interfaces.md) for application event routing; and [MQTT commands](mqtt.md) for ESP fields.
+
+**Implementation:** [Android setup and behavior](../apps/mobile/README.md) · [backend handoff](../apps/mobile/docs/backend-integration.md) · [physical-device acceptance](../apps/mobile/docs/device-acceptance.md). The phone's primary display now shows the **frontend webcam**; until live frames arrive it shows a waiting state. Session controls live in a Controls panel. The implementation also follows the existing ESP8266 MQTT envelope in [robot-operation.md](./robot-operation.md); its authenticated backend session lease is a proposed integration addition documented in the handoff.
+
+> **Android only.** A Kotlin app needs an **Android phone on the robot**. Confirm the team has one at H0.
 
 ## Setup and connection
 

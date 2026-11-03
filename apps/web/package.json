@@ -6,6 +6,7 @@
     "dev": "next dev --port 3001",
     "build": "next build",
     "check-types": "tsc --noEmit",
+    "test": "bun test tests",
     "start": "next start",
     "env:generate": "varlock codegen"
   },
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@Teekhi_Nazaar/config": "workspace:*",
+    "@types/bun": "catalog:",
     "@tailwindcss/postcss": "catalog:",
     "@types/node": "^26.4.1",
     "@types/react": "catalog:",

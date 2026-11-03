@@ -1,0 +1,14 @@
+{
+  "name": "mobile",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:hub": "bun run tools/dev-hub.ts",
+    "test": "bun test tools",
+    "check-types": "tsc -p tools/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "typescript": "catalog:"
+  }
+}

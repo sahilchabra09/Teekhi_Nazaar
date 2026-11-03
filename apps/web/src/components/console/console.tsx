@@ -2,86 +2,69 @@
 
 import { LifeBuoy, LogOut, MessageSquareText, Navigation, OctagonX, Phone, ScanEye, Volume2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { toast } from "sonner";
 
 import { IrisMark } from "@/components/iris/logo";
 import { authClient } from "@/lib/auth-client";
+import { runAuthAction } from "@/lib/auth-actions";
+import { useRobotConnection } from "@/lib/robot/use-robot-connection";
+import { conversationReducer, initialConversation } from "@/lib/robot/conversation";
+import type { ConsoleView as View, ReplySource } from "@/lib/robot/conversation";
 
-import { type Direction, RobotFeed } from "./robot-feed";
+import { RobotFeed } from "./robot-feed";
+import { ConnectionBar } from "./connection-bar";
 import { type PanelCard, SidePanel } from "./side-panel";
-
-type View =
-  | { name: "home" }
-  | { name: "phrases" }
-  | { name: "help" }
-  | { name: "suggestions"; heard: string; replies: string[] }
-  | { name: "confirm"; text: string; from: View }
-  | { name: "speaking"; text: string };
 
 const QUICK_PHRASES = ["Please come here.", "I need some help.", "Could you repeat that?"];
 
-// Stand-in conversation until the hub sends real `suggestions` (docs/interfaces.md §3).
-const MOCK_CONVERSATIONS = [
-  { heard: "Hey, do you need anything?", replies: ["Could you bring me some water?", "I’m okay, thank you.", "Can we talk for a minute?"] },
-  { heard: "How are you feeling today?", replies: ["Pretty good, thanks.", "A little tired today.", "Better now that you’re here."] },
-  { heard: "Want me to open the window?", replies: ["Yes, please.", "No, I’m fine.", "Maybe in a few minutes."] },
-];
-
 export default function Console({ userName }: { userName: string }) {
   const router = useRouter();
-  const [view, setView] = useState<View>({ name: "home" });
-  const [driveEnabled, setDriveEnabled] = useState(true);
-  const [moving, setMoving] = useState<Direction | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mockIndex = useRef(0);
-
-  // ── robot movement: short bounded bursts, re-sent while the gaze stays (interfaces.md §3)
-  const move = useCallback((d: Direction) => {
-    setMoving(d);
-    if (stopTimer.current) clearTimeout(stopTimer.current);
-    stopTimer.current = setTimeout(() => setMoving(null), 300);
-    // TODO(hub): hub.send({ type: "move", direction: d, duration_ms: 300, seq })
-  }, []);
-
-  const speak = useCallback((text: string) => {
-    setView({ name: "speaking", text });
-    // TODO(hub): hub.send({ type: "speak", speak_id, text, source }); return home on tts_status: finished
-    setTimeout(() => setView({ name: "home" }), 2600);
-  }, []);
-
-  const confirm = (text: string, from: View) => setView({ name: "confirm", text, from });
-
-  // ── zero-prompt moment: someone speaks near the robot → replies appear on their own.
-  //    Until the hub is connected, press S to simulate it.
-  const simulateSpeech = useCallback(() => {
-    const c = MOCK_CONVERSATIONS[mockIndex.current++ % MOCK_CONVERSATIONS.length]!;
-    setView((v) => (v.name === "confirm" || v.name === "speaking" ? v : { name: "suggestions", ...c }));
-  }, []);
+  const connection = useRobotConnection();
+  const [conversation, dispatch] = useReducer(conversationReducer, initialConversation);
+  const { view } = conversation;
+  const [signingOut, setSigningOut] = useState(false);
+  const setView = (next: View) => dispatch({ type: "navigate", view: next });
+  const confirm = (text: string, from: View, source: ReplySource = "phrase") => setView({ name: "confirm", text, source, from });
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "s" && !(e.target instanceof HTMLInputElement)) simulateSpeech();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [simulateSpeech]);
+    if (!connection.hub) return;
+    const unsubscribes = ["speech_activity", "transcript", "suggestions", "tts_status"].map((type) =>
+      connection.hub!.on(type, (message) => dispatch({ type: "event", message })),
+    );
+    unsubscribes.push(connection.hub.on("error", (message) => toast.error(typeof message.message === "string" ? message.message : "The hub reported an error.")));
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [connection.hub]);
+  useEffect(() => {
+    if (!connection.phone || connection.status !== "connected") dispatch({ type: "disconnected" });
+  }, [connection.phone, connection.status]);
+  useEffect(() => {
+    if (conversation.error) { toast.error(conversation.error); dispatch({ type: "clear_error" }); }
+  }, [conversation.error]);
+  useEffect(() => {
+    if (view.name !== "speaking") return;
+    const timer = setTimeout(() => dispatch({ type: "timeout", speakId: view.speakId }), 95_000);
+    return () => clearTimeout(timer);
+  }, [view]);
 
-  useEffect(() => () => stream?.getTracks().forEach((t) => t.stop()), [stream]);
-
-  async function previewWebcam() {
+  function speak(text: string, source: ReplySource) {
+    if (!connection.phone || connection.status !== "connected") { toast.error("Connect the robot phone before speaking."); return; }
+    const speakId = `s_${crypto.randomUUID()}`;
     try {
-      setStream(await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false }));
-    } catch {
-      toast.error("Camera access was blocked. Allow it in the browser’s address bar and try again.");
-    }
+      connection.hub!.send({ type: "speak", speak_id: speakId, text, source, ts: Date.now() });
+      setView({ name: "speaking", text, speakId });
+    } catch (cause) { toast.error(cause instanceof Error ? cause.message : "Could not send speech"); }
   }
 
   async function signOut() {
-    await authClient.signOut();
-    router.push("/login");
-    router.refresh();
+    if (signingOut) return;
+    setSigningOut(true);
+    connection.disconnect();
+    await runAuthAction(() => authClient.signOut(), {
+      onSuccess: () => { router.push("/login"); router.refresh(); },
+      onError: (message) => toast.error(message),
+      onSettled: () => setSigningOut(false),
+    });
   }
 
   const home: View = { name: "home" };
@@ -95,11 +78,11 @@ export default function Console({ userName }: { userName: string }) {
         {
           kind: "action",
           key: "drive",
-          title: driveEnabled ? "Driving is on" : "Driving is off",
-          hint: driveEnabled ? "Look here to pause driving" : "Look here to drive again",
+          title: "Driving unavailable",
+          hint: "MQTT control session required",
           icon: Navigation,
-          tone: driveEnabled ? "teal" : "plain",
-          onSelect: () => setDriveEnabled((d) => !d),
+          tone: "plain",
+          onSelect: () => toast("The MQTT controller/session publisher is not connected. Motor control stays off."),
         },
         { kind: "action", key: "phrases", title: "Say something", hint: "Phrases you use often", icon: MessageSquareText, tone: "honey", onSelect: () => setView({ name: "phrases" }) },
         { kind: "action", key: "help", title: "Help", hint: "Caregiver, eyes, stop", icon: LifeBuoy, tone: "sky", onSelect: () => setView({ name: "help" }) },
@@ -123,12 +106,11 @@ export default function Console({ userName }: { userName: string }) {
         {
           kind: "action",
           key: "caregiver",
-          title: "Call my caregiver",
+          title: "Ask for help",
           icon: Phone,
           tone: "honey",
           onSelect: () => {
-            toast.success("Caregiver alert sent");
-            setView(home);
+            confirm("Please come here. I need assistance.", view, "system");
           },
         },
         {
@@ -146,15 +128,21 @@ export default function Console({ userName }: { userName: string }) {
           icon: OctagonX,
           tone: "tomato",
           onSelect: () => {
-            setMoving(null);
-            setDriveEnabled(false);
-            toast.success("Robot stopped. Driving is off.");
-            setView(home);
+            toast("Use STOP on the mounted phone. This console has no authorized MQTT drive connection yet.");
           },
         },
       ];
       break;
     case "suggestions":
+      if (view.lowConfidence) {
+        heading = "Could you repeat that?";
+        cards = [
+          { kind: "action", key: "repeat", title: "Ask them to repeat", tone: "honey", onSelect: () => confirm("Sorry, could you repeat that?", view, "system") },
+          { kind: "action", key: "ignore", title: "Ignore", tone: "plain", onSelect: () => setView(home) },
+          { kind: "action", key: "phrases", title: "Use a quick phrase", tone: "sky", onSelect: () => setView({ name: "phrases" }) },
+        ];
+        break;
+      }
       heading = "Pick a reply";
       back = { label: "Ignore", onSelect: () => setView(home) };
       cards = view.replies.map((r, i) => ({
@@ -162,14 +150,14 @@ export default function Console({ userName }: { userName: string }) {
         key: r,
         title: r,
         tone: (["teal", "honey", "sky"] as const)[i]!,
-        onSelect: () => confirm(r, view),
+        onSelect: () => confirm(r, view, "suggestion"),
       }));
       break;
     case "confirm":
       heading = "Say this out loud?";
       cards = [
         { kind: "preview", key: "preview", text: view.text },
-        { kind: "action", key: "speak", title: "Speak it", icon: Volume2, tone: "honey", onSelect: () => speak(view.text) },
+        { kind: "action", key: "speak", title: "Speak it", icon: Volume2, tone: "honey", onSelect: () => speak(view.text, view.source) },
         { kind: "action", key: "cancel", title: "Cancel", icon: X, tone: "plain", onSelect: () => setView(view.from) },
       ];
       break;
@@ -179,20 +167,25 @@ export default function Console({ userName }: { userName: string }) {
       break;
   }
 
-  const heard = view.name === "suggestions" ? view.heard : null;
+  const heard = view.name === "suggestions" ? view.heard : conversation.heard;
 
   return (
-    <main className="grid h-svh grid-cols-1 gap-3 bg-mist p-3 md:grid-cols-[minmax(0,4fr)_minmax(14rem,1fr)]">
+    <main className="flex h-svh flex-col gap-3 overflow-y-auto bg-mist p-3">
+      <ConnectionBar connection={connection} />
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[minmax(0,4fr)_minmax(14rem,1fr)]">
       {/* left: camera fills the whole height */}
       <div className="min-h-[55vh] md:min-h-0">
         <RobotFeed
-          stream={stream}
-          mirrored
-          driveEnabled={driveEnabled && view.name !== "speaking"}
-          moving={moving}
+          stream={connection.media.remote}
+          localCamera={connection.camera}
+          fallbackFrameUrl={connection.media.fallbackFrameUrl}
+          mediaState={connection.media.state}
+          driveEnabled={false}
+          moving={null}
           heard={heard}
-          onMove={move}
-          onPreviewWebcam={previewWebcam}
+          listening={conversation.activeSpeech}
+          onMove={() => {}}
+          onPreviewWebcam={() => void connection.openCamera()}
         />
       </div>
 
@@ -207,6 +200,7 @@ export default function Console({ userName }: { userName: string }) {
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-pine-soft">{userName}</span>
             <button
               onClick={signOut}
+              disabled={signingOut}
               aria-label="Sign out"
               title="Sign out"
               className="grid size-8 place-items-center rounded-full text-pine-soft transition-colors hover:bg-white hover:text-pine"
@@ -216,6 +210,7 @@ export default function Console({ userName }: { userName: string }) {
           </div>
         }
       />
+      </div>
     </main>
   );
 }
