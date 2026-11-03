@@ -180,6 +180,19 @@ The browser console logs each round's timings: `[talk] heard in … ms, replies 
 
 ---
 
+## 6b. Working together with the robot phone (after the Android merge)
+
+The console now has the phone pairing bar from the Android companion (docs/mobile.md). Both paths work side by side:
+
+| | Laptop mic ("Say something") | Robot phone (hub) |
+|---|---|---|
+| Who listens | `UtteranceRecorder` on the mic picked in the footer | Phone app (on-device STT for now) |
+| How suggestions arrive | `POST /api/talk/utterance` response | `suggestions` message over the hub WebSocket |
+| **Speak it** | **Phone connected → `speak` over the hub** (the phone says it and reports `tts_status`); **no phone → spoken on the laptop** | Same |
+| After speaking a talk reply | `/api/talk/spoken` records it in the conversation's AutoSage chat, then IRIS listens again (on the phone path once `tts_status: finished` arrives) | — |
+
+Hub suggestions that are low-confidence show the phone flow's "Could you repeat that?" cards. Talk replies stay pickable, because AutoSage already phrases unsure replies as clarifying questions, and they get a **New replies** pill.
+
 ## 7. Moving to the robot phone
 
 The server pipeline doesn't change. Only who records and who speaks:
