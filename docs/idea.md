@@ -7,11 +7,13 @@
 **Selected problem statement:** **PS-02 — Zero-Prompt AI (Kill the Chatbox)**  
 **Project stage:** Hackathon prototype / proof of concept
 
+**Control architecture:** MQTT intentions → mounted phone with gyro correction → ESP8266 wheel commands. [Robot operation](robot-operation.md) defines this path, and [MQTT commands](mqtt.md) describes the existing firmware. The mobile/frontend/backend integration is planned work.
+
 ---
 
 ## 1. The idea in one paragraph
 
-**IRIS** is an assistive telepresence system designed for people with severe motor impairments who may be unable to operate a conventional joystick, keyboard, or mouse, and may also find speaking difficult. A person uses their **eyes** to navigate a small, camera-equipped mobile robot remotely. When someone speaks near the robot, an **event-driven AI pipeline** detects the speech, transcribes it, understands the conversational context, and automatically offers a few possible replies on the user's screen. The user selects a response with their gaze, confirms it, and the robot **speaks it aloud**. The robot can also react autonomously to obstacles and connection failures, making the system more than a remotely controlled RC car.
+**IRIS** is an assistive telepresence system designed for people with severe motor impairments who may be unable to operate a conventional joystick, keyboard, or mouse, and may also find speaking difficult. A person uses their **eyes** to navigate a small, camera-equipped mobile robot remotely. When someone speaks near the robot, an **event-driven AI pipeline** detects the speech, transcribes it, understands the conversational context, and automatically offers a few possible replies on the user's screen. The user selects a response with their gaze, confirms it, and the robot **speaks it aloud**. The mounted phone uses orientation feedback to maintain the requested heading and disarms on expired control input. The ESP8266 applies wheel output and its existing phone-command timeout; the current firmware has no obstacle or edge detection.
 
 > **Important distinction:** IRIS provides **remote presence and communication**, not physical transport of the patient's body. Its value is enabling someone to visit spaces and interact with people remotely without having to travel there physically.
 
@@ -32,11 +34,11 @@ Traditional video calls still require another person to position or carry a devi
 
 | PS-02 requirement | IRIS implementation |
 |---|---|
-| React to real-world events | Microphone detects another person speaking; sensors detect obstacles; connection watchdog detects lost control. |
-| AI decides in context | Speech-to-text and an LLM generate context-relevant reply options; obstacle logic decides whether movement is safe. |
+| React to real-world events | Microphone detects another person speaking; phone orientation detects heading drift; command freshness detects lost control. |
+| AI decides in context | Speech-to-text and an LLM generate context-relevant reply options; deterministic mobile control adjusts heading and stops stale movement. |
 | Take meaningful action | Displays gaze-selectable responses, speaks the confirmed response through the robot, and stops movement when unsafe. |
 | Keep the person in control | **The AI never speaks a suggested answer without explicit gaze confirmation.** |
-| Handle errors | On gaze-tracking loss, Wi-Fi timeout, low confidence, or obstacle detection, the robot stops and displays a clear state. |
+| Handle errors | On gaze-tracking loss or stale control, the integrated mobile app disarms; recognition uncertainty is shown without speaking an unconfirmed reply. |
 | No chatbox | The primary interface is eye gaze, a live robot feed, contextual response cards, and event-triggered assistance. |
 
 ### Primary trigger → decision → action → outcome
@@ -48,7 +50,7 @@ Traditional video calls still require another person to position or carry a devi
 5. **Action:** The robot's speaker converts the selected text to speech.
 6. **Outcome:** The other person hears the user's chosen response and can continue the conversation.
 
-**Secondary autonomous chain:** An obstacle appears → distance sensor reports danger → motor controller rejects forward movement → robot stops → UI reports “Obstacle detected.” This is a deterministic safety rule, not something that should depend on a generative model.
+**Secondary feedback chain:** The chassis drifts from the requested heading → the phone measures orientation error → the local controller adjusts signed wheel effort over MQTT. If the intention expires or orientation becomes unavailable, the phone stops/disarms. This control loop is deterministic and independent of the generative reply model.
 
 ## 4. Core features
 
@@ -56,9 +58,9 @@ Traditional video calls still require another person to position or carry a devi
 
 - Use the laptop webcam for gaze tracking and calibration.
 - Display **large on-screen controls** (Forward, Left, Right, Backward, Stop) alongside the live robot camera feed.
-- Use a gaze dwell to select a movement command; issue **short, bounded movement bursts**, rather than allowing indefinite motion after a glance.
+- Use gaze dwell to select a direction and renew a fresh MQTT intention while the navigation target is held. Leaving the target sends Stop; the phone expires stale intentions independently.
 - Provide a prominent Stop action and an **independent physical emergency-stop option** for the demo operator.
-- If tracking becomes unreliable or control packets stop arriving, the robot **automatically stops**.
+- The integrated frontend/mobile controller disarms when tracking becomes unreliable or intentions expire. The existing ESP phone-control branch stops after more than 500 ms without accepted wheel commands; plain bench commands do not use that timeout.
 
 ### B. Remote video, audio, and presence
 
@@ -78,8 +80,9 @@ Traditional video calls still require another person to position or carry a devi
 
 ### D. Safety and autonomy
 
-- Ultrasonic/proximity sensor prevents obvious collisions during forward movement.
-- ESP32 motor watchdog stops the robot if control commands stop or communication fails.
+- Calibrated phone orientation and gyro feedback maintain heading during requested movement.
+- The phone checks intention freshness; the ESP8266 phone-control timeout stops output when accepted wheel commands stop.
+- The current firmware does not use IR or ultrasonic sensors and does not provide obstacle avoidance.
 - Tracking-status indicator: calibrated / uncertain / lost.
 - Emergency stop always overrides AI and navigation.
 - Display readable error states instead of silently continuing.
@@ -107,29 +110,27 @@ Traditional video calls still require another person to position or carry a devi
    - “I'd like to talk for a minute.”
 8. User gazes at the preferred option and confirms it.
 9. The robot speaks that response.
-10. If an obstacle enters the path, the robot independently stops and warns the user.
+10. If gaze/control readiness is lost, the phone disarms and the UI shows the reason. Obstacles require operator awareness because this firmware has no obstacle detector.
 
 ## 6. Proposed architecture
 
 ```mermaid
 flowchart TD
-    U[User / patient] --> G[Laptop webcam + gaze tracker]
+    U[User] --> G[Laptop webcam and gaze tracker]
     G --> UI[IRIS control interface]
-    UI -->|Movement commands| C[Robot control bridge]
-    C --> ESP[ESP32 motor controller]
-    ESP --> MD[Motor driver + wheels]
-    US[Ultrasonic proximity sensor] --> ESP
-    ESP -->|Obstacle / state updates| UI
-
-    PHONE[Smartphone on robot] -->|Live video / audio| UI
-    PHONE -->|Conversation audio with consent| VAD[Voice activity detection]
-    VAD --> STT[Speech-to-text]
-    STT --> LLM[AI reply suggestion engine]
-    LLM -->|Three candidate replies| UI
-    UI -->|User gaze selection + confirmation| TTS[Text-to-speech]
-    TTS -->|Playback| PHONE
-
-    WATCH[Timeout + emergency-stop watchdog] --> ESP
+    UI -->|High-level intentions| T1[MQTT Topic 1]
+    B[Backend session authorization] --> T1
+    T1 --> PHONE[Mounted phone and gyro controller]
+    PHONE -->|Signed wheel envelope| T2[MQTT Topic 2]
+    T2 --> ESP[ESP8266 motor controller]
+    ESP --> MD[Motor driver and wheels]
+    ESP -->|MQTT output status| PHONE
+    PHONE -->|Mobile status on Topic 1| UI
+    PHONE -->|Live camera and audio| UI
+    PHONE -->|Utterance upload| STT[Speech-to-text service]
+    STT --> LLM[AI reply suggestions]
+    LLM -->|MQTT suggestions| UI
+    UI -->|Confirmed speech over MQTT| PHONE
 ```
 
 ### Practical hardware
@@ -137,15 +138,14 @@ flowchart TD
 | Component | Function | Priority |
 |---|---|---|
 | 2WD/4WD RC chassis with motors and battery | Mobile base | Essential |
-| ESP32 | Receives movement commands; applies stop/watchdog rules | Essential |
+| ESP8266 / ESP-12E | Applies signed wheel commands and the existing phone-control timeout | Essential |
 | Compatible motor driver (e.g., TB6612FNG or L298N) | Powers motors | Essential |
 | Laptop with webcam | Eye tracking and control UI | Essential |
-| Smartphone (or equivalent camera/audio device) | Live remote video, microphone, speaker | Essential for telepresence demo |
-| Ultrasonic distance sensor | Obstacle detection | High |
+| Rigidly mounted Android phone | MQTT intention translation, gyro correction, live video, microphone, speaker | Essential |
 | Physical emergency-stop switch / accessible power cut | Safety override | High |
 | LEDs / buzzer | Visible motor / connection status | Optional |
 
-**Hardware caution:** Match motor-driver voltage/current ratings to the motors; use a suitable battery and wiring. A motor driver is required—don't power the motors directly from ESP32 GPIO pins.
+**Hardware caution:** Match motor-driver voltage/current ratings to the motors; use a suitable battery and wiring. A motor driver is required—don't power the motors directly from ESP8266 GPIO pins.
 
 ### Suggested software stack
 
@@ -153,44 +153,59 @@ flowchart TD
 |---|---|
 | Gaze | WebGazer.js or a tested MediaPipe-based gaze/face pipeline |
 | User interface | React / JavaScript web app with large target buttons |
-| Robot networking | WebSocket or HTTP via a local Node.js/Python server |
-| Video/audio | WebRTC or a tested low-latency local streaming solution |
+| Robot networking | MQTT broker with Topic 1 intentions and Topic 2 wheel commands |
+| Video/audio | WebRTC media with signalling over MQTT; HTTPS for utterance upload |
 | Voice activity detection | Browser audio activity detection or VAD library |
 | Speech-to-text | Whisper / browser or cloud speech recognizer |
 | AI suggestions | Gemini/OpenAI-compatible LLM API, with short structured output |
 | Text-to-speech | Browser speech synthesis or a TTS service played on robot smartphone |
-| Robot firmware | Arduino framework for ESP32 |
+| Robot firmware | Arduino framework for ESP8266 |
 
 **Engineering note:** Test webcam calibration and video/audio transport first—these are the two integration risks most likely to block the demo. A prototype can use simple fixed-direction gaze zones rather than precise pixel-level eye tracking.
 
 ## 7. Example system messages / data flow
 
-**Robot movement command (illustrative):**
+**Frontend/backend intention on Topic 1 (proposed application message):**
 
 ```json
 {
-  "type": "move",
-  "direction": "forward",
-  "duration_ms": 200,
-  "sequence": 42
+  "type": "drive_intent",
+  "device_id": "esp12e_carbot",
+  "control_session_id": "session-42",
+  "command_id": "drive-21",
+  "seq": 21,
+  "action": "forward",
+  "speed": 40,
+  "sent_at": "2026-11-04T10:00:00.000Z",
+  "ttl_ms": 300
 }
 ```
 
-**Robot state (illustrative):**
+**Phone status on Topic 1 (proposed application message):**
 
 ```json
 {
-  "type": "robot_state",
-  "connected": true,
-  "obstacle_detected": false,
-  "movement_enabled": true
+  "type": "mobile_status",
+  "device_id": "esp12e_carbot",
+  "control_session_id": "session-42",
+  "last_command_id": "drive-21",
+  "state": "driving",
+  "esp_online": true,
+  "calibrated": true,
+  "heading_deg": 5,
+  "target_heading_deg": 0,
+  "left": 35,
+  "right": 45
 }
 ```
 
-**AI suggestions (illustrative):**
+The phone translates intentions into the exact ESP wheel envelope in [MQTT commands](mqtt.md); the ESP does not parse `drive_intent`. Example times are illustrative, so publishers must use fresh current timestamps.
+
+**AI suggestions body (illustrative; the Topic 1 envelope adds `type:"suggestions"`, `device_id`, `control_session_id`, and `ts`):**
 
 ```json
 {
+  "utterance_id": "u_17",
   "heard": "Do you need anything?",
   "suggestions": [
     "Could you please bring me some water?",
@@ -208,13 +223,13 @@ The AI should generate **choices**, never claims about the user's medical condit
 **Non-negotiable deliverables:**
 
 - [ ] RC robot moves reliably in four directions and stops.
-- [ ] ESP32 watchdog stops robot when commands disconnect.
+- [ ] Active streamed control stops through the ESP8266 phone timeout when accepted wheel updates cease.
 - [ ] Laptop webcam can select large UI controls with gaze after calibration.
 - [ ] Remote live camera feed from the robot is visible on the laptop.
 - [ ] A teammate speaks near the robot and the utterance gets transcribed.
 - [ ] AI generates three reply cards without a typed prompt.
 - [ ] User gaze-selects and confirms a reply; it plays through the robot's speaker.
-- [ ] Obstacle detection stops the robot during the demo.
+- [ ] Expired intentions, phone disconnection, and reconnect while disarmed are demonstrated through the MQTT control path.
 - [ ] One successful end-to-end demo can be repeated reliably.
 
 **Not in the overnight MVP:** hospital-wide autonomous navigation, elevators, autonomous patient transport, medical decision-making, facial recognition, autonomous speech without user consent, or deployment in actual clinical areas.
@@ -223,19 +238,19 @@ The AI should generate **choices**, never claims about the user's medical condit
 
 | Phase | Target | Approx. effort |
 |---|---|---:|
-| 1 | Chassis, ESP32 motor commands, stop/watchdog | 2.5 h |
+| 1 | ESP8266 provisioning, MQTT wheel control, and the phone heading loop | 2.5 h |
 | 2 | Live video/audio from robot phone | 2 h |
 | 3 | Webcam gaze calibration + 5 large control zones | 2.5 h |
 | 4 | Speech detection → transcription → AI reply cards → TTS | 3 h |
 | 5 | Gaze-based reply selection, confirmation, integration | 2 h |
-| 6 | Obstacle demo, reconnect/error recovery, reliability testing | 1.5 h |
+| 6 | Gyro correction, intention expiry, reconnect/error recovery | 1.5 h |
 | 7 | PPT, scripted pitch, repeatable demonstration | 2 h |
 
 The tasks can overlap across a team. **Prioritize a dependable demo over adding optional features.**
 
 ### Team split (example: four members)
 
-- **Member 1 — Robotics:** ESP32 firmware, chassis, motor driver, obstacle safety.
+- **Member 1 — Robotics:** ESP8266 firmware, chassis, motor driver, and phone mount.
 - **Member 2 — Gaze interface:** Calibration, navigation UI, reply-card selection.
 - **Member 3 — AI/audio:** VAD, STT, response generation, TTS, permissions.
 - **Member 4 — Integration/demo:** Phone streaming, networking, testing, end-to-end coordination, pitch.
@@ -246,7 +261,7 @@ The tasks can overlap across a team. **Prioritize a dependable demo over adding 
 
 **Act 2 — Conversation:** The friend asks, “Hey, do you need anything?” The system automatically transcribes the question and shows three reply suggestions. The user selects and confirms “Could you please bring me some water?” with gaze. IRIS speaks the sentence aloud.
 
-**Act 3 — Autonomy:** While the user requests forward movement, a box is put in the robot's path. The proximity sensor triggers a stop; the interface shows the reason.
+**Act 3 — Feedback control:** In a supervised clear area, demonstrate the mounted phone correcting a small heading disturbance during requested movement. Release the navigation target and show the stop/disarm state. Do not claim obstacle avoidance.
 
 **Act 4 — Resilience:** Briefly interrupt the control connection or intentionally remove the face from webcam tracking; the robot remains stopped rather than continuing an old command.
 
@@ -260,7 +275,7 @@ Useful prototype metrics (report observed values, not invented claims):
 - **Navigation reliability:** Successful forward/turn/stop commands out of attempted commands.
 - **Speech-response latency:** Time from the end of a spoken question to suggested replies appearing.
 - **Conversation completion:** Whether a user can select and speak a chosen reply without a keyboard/mouse.
-- **Safety stop:** Time until motors stop after an obstacle or network/control loss.
+- **Control stop:** Observed time until motors stop after released input, expired intention, or phone/network loss. Measure each case separately rather than claiming one end-to-end timeout.
 
 ## 11. Risks, accessibility, and ethics
 
@@ -269,7 +284,7 @@ Useful prototype metrics (report observed values, not invented claims):
 - **Avoid accidental activation:** Use large targets, dwell + confirmation, motion time limits, and a stop watchdog.
 - **The user owns their words:** Never make AI-generated text speak automatically. Provide a way to reject or compose a custom response.
 - **Privacy:** Obtain consent from everyone whose audio/video is captured. Do not record or upload hospital conversations without authorization. Minimize storage of transcripts, audio, and video.
-- **Fail safely:** On uncertain gaze, lost link, obstacle, or conflicting instructions, stop motors and wait for renewed user control.
+- **Control faults:** On uncertain gaze, expired intention, lost phone link, or conflicting control ownership, disarm and wait for fresh readiness and explicit enable.
 - **Use controlled spaces:** Demonstrate only on a clear, supervised tabletop/floor course away from patients, stairs, traffic, and hazardous equipment.
 
 ## 12. Beyond the hackathon
@@ -280,7 +295,7 @@ These are **future research and development possibilities**, not claims about th
 
 ## 13. Project description for submission
 
-**IRIS** is an AI-powered, eye-controlled telepresence and communication robot designed for people with severe motor impairments. Using a laptop webcam, users navigate a small mobile robot via gaze-based controls and experience remote spaces through the robot's live camera and audio. When someone speaks nearby, a zero-prompt AI pipeline detects and transcribes the speech, proposes contextual reply options, and lets the user choose a response with their eyes. After explicit confirmation, the robot speaks the selected words aloud. An ESP32 motor controller, obstacle detection, and command watchdog add autonomous safety behaviour. IRIS demonstrates how sensor input, AI, and physical robotics can work together to support remote presence and communication without a traditional chatbox.
+**IRIS** is an AI-powered, eye-controlled telepresence and communication robot designed for people with severe motor impairments. Using a laptop webcam, users navigate a small mobile robot via gaze-based controls and experience remote spaces through the robot's live camera and audio. When someone speaks nearby, a zero-prompt AI pipeline detects and transcribes the speech, proposes contextual reply options, and lets the user choose a response with their eyes. After explicit confirmation, the robot speaks the selected words aloud. An ESP8266 motor controller receives MQTT wheel commands from the mounted phone, which combines the selected movement with gyro feedback and command-freshness checks. IRIS demonstrates how sensor input, AI, and physical robotics can work together to support remote presence and communication without a traditional chatbox.
 
 ---
 

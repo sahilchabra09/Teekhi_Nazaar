@@ -1,216 +1,91 @@
-# IRIS: Interfaces (the shared contract)
+# IRIS shared MQTT interfaces
 
-> **Frozen at H1.** After that, anyone who changes a message here must tell the other two people **before** pushing.
-> Sahil turns this doc into zod schemas in `packages/protocol/src/index.ts`. TypeScript code imports those schemas. The Kotlin app (`Protocol.kt`) and the ESP32 firmware follow the JSON by hand.
+MQTT is the robot command architecture. Frontend/backend publish intentions to the mounted phone; the phone combines each intention with local gyro feedback and publishes wheel commands to the ESP8266. The ESP never receives application intentions directly.
 
-**Laptop IP on the hotspot:** `__________` (fill in at H1)
+The detailed control contract is [robot operation](robot-operation.md); exact firmware fields and behavior are in [MQTT commands](mqtt.md). Application schemas described here are planned work. The firmware in `bot/` already implements its documented command/status interface.
 
----
+## Connections and topics
 
-## 1. Connections
+| Channel | Topic | Publishers and subscribers |
+| --- | --- | --- |
+| Topic 1 application channel | `teekhi-nazaar/esp12e_carbot/intent` | Frontend/backend publish authorized `drive_intent`; phone subscribes. Phone publishes `mobile_status`; frontend/backend subscribe. Other typed application events below use this channel. |
+| Topic 2 motor commands | `carbot/command` | Only the mounted phone normally publishes; ESP8266 subscribes. |
+| ESP output status | `carbot/status` | ESP8266 publishes; phone subscribes and relays relevant state as `mobile_status`. |
 
-| Who | Connects to | Notes |
-|---|---|---|
-| Web UI (laptop browser) | `ws://localhost:3000/ws?role=web` | `localhost` already counts as a secure context, so nothing extra is needed |
-| Phone app (Kotlin) | `ws://<LAPTOP_IP>:3000/ws?role=phone` | Native app, so no HTTPS needed; just allow cleartext in the manifest (mobile.md §6) |
-| ESP32 | `ws://<LAPTOP_IP>:3000/ws?role=robot` | Plain `ws://`, no TLS on the ESP32 |
-| Phone → audio clips | `POST <hub>/api/utterance` | See §4 |
+Current ESP broker: `broker.emqx.io:1883`. Browser MQTT clients use `wss://broker.emqx.io:8084/mqtt`; this is the broker's MQTT browser transport. Every application message still follows MQTT publish/subscribe. Protected deployments require a private authenticated broker, TLS on every connection, and topic permissions; see [password and transport security](robot-operation.md#password-process-and-protection-against-interception).
 
-- The hub allows **one connection per role**. A new connection with the same role replaces the old one.
-- On connect, the client sends `{"type":"hello","role":"web|phone|robot","version":1}`.
-- **Every message** is JSON with a `type` and a `ts` (ms since epoch). Every example below has an implicit `"ts": 1730000000000`.
+The backend coordinates one active controller per robot. Each subscriber filters by `type`, target `device_id`, active session, and relevant message ID. The `type` field routes application messages; it is not proof of sender identity. Unknown types and reflected status messages never enter the movement translator.
 
----
+## Movement and status
 
-## 2. Message routing table
+Use the exact `drive_intent` and `mobile_status` shapes in [robot operation](robot-operation.md#mqtt-channels-and-message-contracts). Movement actions are `forward`, `backward`, `left`, `right`, and `stop`, with speed 0–100. Stop is `type:"drive_intent", action:"stop"`, not a separate firmware command type.
 
-| `type` | From → To | Purpose |
-|---|---|---|
-| `hello` | any → hub | Identify role |
-| `peer_status` | hub → web, phone | Who is connected right now |
-| `move` | web → hub → robot | Short bounded movement burst |
-| `stop` | web / hub / phone → robot | Stop now (always obeyed) |
-| `robot_state` | robot → hub → web | Robot telemetry |
-| `gaze_status` | web → hub | Tracking quality; hub stops the robot when `lost` |
-| `speech_activity` | phone → hub → web | Someone near the robot started or stopped talking |
-| `transcript` | phone → hub (fallback path) · hub → web | Text of what was heard |
-| `suggestions` | hub → web | 3 AI reply options |
-| `speak` | web → hub → phone | Say this out loud (only sent after gaze confirmation) |
-| `tts_status` | phone → hub → web | Speaking started, finished, or failed |
-| `motion` | phone → hub | Orientation/acceleration, ≤ 10 Hz |
-| `bump` | phone → hub | Sudden jolt or tip-over; hub sends `stop` |
-| `rtc_offer` / `rtc_answer` / `rtc_ice` | phone ↔ web via hub | WebRTC signalling, relayed unchanged |
-| `frame` | phone → hub → web | **Fallback only:** JPEG video frame if WebRTC fails |
-| `error` | hub → any | Something went wrong; show it |
+The phone publishes the existing timeout-enabled envelope to Topic 2, including `password`, `source:"lain-mobile"`, `device_id:"esp12e_carbot"`, `phone_control:true`, explicit `armed`, and integer `left`/`right` values from -100 to +100. `cmd` is a direction label; wheel values drive the motors. The source string is a firmware compatibility marker. Credentials stay local and are never included on Topic 1.
 
----
+| Rule | Owner and behavior |
+| --- | --- |
+| Held intention | Frontend/backend renew every 100 ms with fresh IDs/sequences/time; proposed validity is 300 ms. |
+| Heading correction | Phone retains the target heading while the same direction is held and uses calibrated orientation feedback. |
+| Wheel publication | Phone sends latest wheel values every 100 ms, QoS 0, `retain=false`. |
+| Explicit stop | Phone sends `armed:false`, `left:0`, `right:0`, QoS 1, `retain=false`. |
+| Upstream expiry or invalid readiness | Phone disarms and stops publishing drive commands; keeping the old intention alive is forbidden. |
+| Missing phone commands | Existing ESP stops active phone control after more than 500 ms, or on detected MQTT/Wi-Fi loss. Plain commands do not have this timeout. |
+| Reconnect | Remain disarmed; discard queued movement and require fresh readiness and explicit enable. |
+| ESP status | Full output status every two seconds; expire stale status locally. There is no per-command execution acknowledgement. |
 
-## 3. Message shapes
+Sequence, session, and expiry validation belong to the phone/backend. The ESP does not enforce those application fields. There is no duration-based movement schema, ultrasonic/proximity telemetry, or IR behavior in the current firmware. Do not display an obstacle-clear state based on absent sensor data.
 
-### Robot control
+## Proposed conversation and media events
 
-```jsonc
-// web → hub → robot
-{ "type": "move", "direction": "forward" | "backward" | "left" | "right",
-  "duration_ms": 300,   // clamped by the ESP32 to 100–400
-  "seq": 42 }           // increasing; robot ignores seq <= last seen
+These events are future application work on Topic 1. Every event includes `type`, target `device_id`, the backend-authorized `control_session_id`, and an application timestamp `ts` in milliseconds. Frontend, backend, and phone reject events outside the active authorized session; the session ID alone does not authenticate a publisher. Validate ownership and permissions in addition to message shape. None of these events is forwarded to the ESP.
 
-{ "type": "stop", "reason": "user" | "gaze_lost" | "obstacle" | "bump" | "disconnect" | "estop" }
+| Type | Origin and consumer | Purpose |
+| --- | --- | --- |
+| `gaze_status` | Frontend to backend | Calibrated/uncertain/lost state. Frontend also stops its own intention heartbeat immediately on lost gaze. |
+| `speech_activity` | Phone to frontend/backend | Nearby speech has started or stopped. |
+| `transcript` | Backend to frontend; phone fallback to backend | Recognized text for one utterance. |
+| `suggestions` | Backend to frontend | Three candidate replies requiring explicit confirmation. |
+| `speak` | Authorized frontend to phone | Speak a user-confirmed response. Deduplicate by `speak_id`. |
+| `tts_status` | Phone to frontend/backend | Speaking started, finished, or failed. |
+| `motion` | Phone to frontend/backend | Optional orientation telemetry; high-rate control calculations remain local to the phone. |
+| `bump` | Phone to frontend/backend | Optional impact/tilt event. Phone also stops locally when its configured fault policy fires. |
+| `media_ready` | Frontend to phone | Request a fresh media offer for the active authorized session. |
+| `rtc_offer`, `rtc_answer`, `rtc_ice` | Phone and frontend | WebRTC signalling messages carried over MQTT. |
+| `error` | Application component to relevant consumers | Human-readable failure with a machine-readable code. |
 
-// robot → hub → web, at 5 Hz and immediately on any change
-{ "type": "robot_state",
-  "moving": "forward" | "backward" | "left" | "right" | null,
-  "obstacle": false,
-  "distance_cm": 87,          // -1 if no sensor reading
-  "movement_enabled": true,   // false while e-stop is pressed or forward is blocked
-  "last_seq": 42 }
-```
+Conversation payload fields remain `utterance_id`, `text`, `confidence` for transcripts; `utterance_id`, `heard`, `suggestions`, `low_confidence`, `requires_user_confirmation:true` for suggestions; and `speak_id`, `text`, `source`, optional `audio_url` for speech. TTS status uses `speak_id`, `state` (`started`, `finished`, `error`), and optional `error`. These fields accompany `type`, `device_id`, `control_session_id`, and `ts`; they do not replace the movement envelope. Preserve the same `utterance_id` from transcript through suggestions so asynchronous responses remain correlated.
 
-**How motion works:** the robot never moves on its own. Each `move` runs for `duration_ms` and then the robot stops by itself. To keep moving, the web UI resends `move` **every 150 ms with `duration_ms: 300`** while the user's gaze rests on a nav zone. If anything breaks (gaze, Wi-Fi, browser, hub), the robot stops within 300 ms without anyone sending a message. This is the main safety mechanism.
+The phone makes the media offer after an authorized `media_ready`. SDP uses `sdp`; ICE uses `candidate`. A reconnect creates a fresh media negotiation. WebRTC carries camera/microphone streams; MQTT carries signalling and application messages. Do not put continuous video or base64 frames on either command topic, where media traffic would compete with command freshness. A media failure should show an unavailable state; a degraded media fallback needs a separate agreed implementation.
 
-### Status
+Speech, suggestions, and media must not silently arm driving. The AI never publishes drive intentions or speaks a suggested response without user confirmation.
 
-```jsonc
-// hub → web, phone (sent on every connect/disconnect)
-{ "type": "peer_status", "web": true, "phone": true, "robot": false }
+## Audio upload
 
-// web → hub (on every change)
-{ "type": "gaze_status", "state": "uncalibrated" | "calibrated" | "uncertain" | "lost" }
-```
+Proposed `POST /api/utterance` on the backend accepts one utterance as multipart form data: `audio` (WAV preferred), `utterance_id`, and `duration_ms`. Use HTTPS and application authentication. This endpoint handles media upload, not robot movement. A successful response is `202 {"ok":true}`; the backend publishes transcript/suggestion events to Topic 1 asynchronously. Do not store clips or log their contents without consent.
 
-### Conversation
+## Browser module contracts
 
-```jsonc
-// phone → hub → web
-{ "type": "speech_activity", "active": true }
+### Gaze module
 
-// hub → web (after STT). Also phone → hub on the fallback path (on-device STT)
-{ "type": "transcript", "utterance_id": "u_17", "text": "Do you need anything?", "confidence": 0.92 }
-
-// hub → web
-{ "type": "suggestions", "utterance_id": "u_17",
-  "heard": "Do you need anything?",
-  "suggestions": ["Could you bring me some water?", "I'm okay, thank you.", "Let's talk for a minute."],
-  "low_confidence": false,             // true → UI shows "Repeat / Ignore" instead of the 3 cards
-  "requires_user_confirmation": true } // always true
-
-// web → hub → phone. ONLY sent after the user confirms with gaze.
-{ "type": "speak", "speak_id": "s_9", "text": "I'm okay, thank you.",
-  "source": "suggestion" | "phrase" | "keyboard" | "system",
-  "audio_url": null }   // optional: if the hub made TTS audio, phone plays this URL instead of using device TTS
-
-// phone → hub → web
-{ "type": "tts_status", "speak_id": "s_9", "state": "started" | "finished" | "error", "error": null }
-```
-
-### Phone sensors
-
-```jsonc
-// phone → hub, ≤ 10 Hz
-{ "type": "motion", "alpha": 12.1, "beta": 3.4, "gamma": -1.2, "accel": 9.9 }  // degrees, m/s²
-
-// phone → hub (hub then sends stop to robot and forwards bump to web)
-{ "type": "bump", "kind": "impact" | "tilt", "magnitude": 24.5 }
-```
-
-### WebRTC signalling (hub relays these unchanged)
-
-```jsonc
-{ "type": "rtc_offer",  "sdp": "..." }                 // phone → web  (the phone always makes the offer)
-{ "type": "rtc_answer", "sdp": "..." }                 // web → phone
-{ "type": "rtc_ice",    "candidate": { /* RTCIceCandidateInit */ } }  // both ways
-```
-
-**Rule:** the phone sends a fresh `rtc_offer` every time `peer_status` changes from `web: false` to `web: true`. That covers reconnects in either direction.
-
-### Fallback video
-
-```jsonc
-{ "type": "frame", "jpeg_b64": "/9j/4AAQ...", "w": 640, "h": 480 }  // phone → hub → web, 5–10 fps
-```
-
-### Errors
-
-```jsonc
-{ "type": "error", "code": "stt_failed" | "llm_failed" | "robot_offline" | "phone_offline" | "bad_message", "message": "human-readable" }
-```
-
----
-
-## 4. HTTP endpoint
-
-`POST /api/utterance`, `multipart/form-data`
-
-| Field | Value |
-|---|---|
-| `audio` | WAV (16 kHz mono preferred) or WebM/Opus blob of **one** utterance |
-| `utterance_id` | phone-generated id, e.g. `u_17` |
-| `duration_ms` | length of the clip |
-
-Response is `202 {"ok": true}`. The result comes back **asynchronously** to the web UI as `transcript` followed by `suggestions`. The hub silently drops clips shorter than 400 ms and transcripts with fewer than 2 words, which filters out noise.
-
----
-
-## 5. Safety rules: who enforces what
-
-Each layer works on its own, so one failure can't make the robot move unsafely.
-
-| Rule | ESP32 (Arunya) | Hub (Sahil) | Web UI (Sahil) |
-|---|:-:|:-:|:-:|
-| Every move is bounded (≤ 400 ms) | ✅ | clamps too | sends ≤ 300 |
-| No message for 1 s → stop, report disconnected | ✅ | | |
-| Obstacle < 25 cm → refuse/stop **forward** (backward and turning still allowed) | ✅ | drops forward moves while `obstacle` | shows red banner |
-| Gaze `lost` → stop | | ✅ sends `stop` | stops resending `move` |
-| Web disconnects → stop | | ✅ | |
-| Phone `bump` → stop | | ✅ | shows warning |
-| Physical e-stop cuts motor power | ✅ hardware | | |
-| AI never speaks without confirmation | | never sends `speak` itself | confirm step |
-
----
-
-## 6. In-browser module contracts (inside `apps/web`)
-
-### Gaze module (Arunya → used by Sahil): `apps/web/src/lib/gaze/`
+Arunya owns `apps/web/src/lib/gaze/`; Sahil consumes its interface. This API remains the boundary for gaze or mouse input:
 
 ```ts
 export type GazeState = "uncalibrated" | "calibrated" | "uncertain" | "lost";
 
 export interface Gaze {
-  init(opts: { mode: "gaze" | "mouse" }): Promise<void>; // mouse = same events driven by the cursor
+  init(opts: { mode: "gaze" | "mouse" }): Promise<void>;
   setMode(mode: "gaze" | "mouse"): void;
-  calibrate(): Promise<{ accuracyPx: number }>;          // draws its own full-screen overlay
+  calibrate(): Promise<{ accuracyPx: number }>;
   onPoint(cb: (p: { x: number; y: number; confidence: number }) => void): () => void;
   onStatus(cb: (s: GazeState) => void): () => void;
-  getCameraStream(): MediaStream | null;                 // lets the rtc module reuse the webcam
+  getCameraStream(): MediaStream | null;
   destroy(): void;
 }
 export const gaze: Gaze;
 ```
 
-**Dwell targets:** any DOM element with `data-gaze-target` gets these `CustomEvent`s dispatched on it:
+DOM elements marked `data-gaze-target` receive `gaze:enter`, `gaze:progress` with `{progress}`, `gaze:leave`, `gaze:select`, and `gaze:hold`. Select fires once after dwell; hold continues while the target remains active. `data-gaze-dwell` controls the dwell time, initially 800 ms. The frontend runs its separate 100 ms intention timer while a navigation target is active; it does not use gaze-event arrival as the publish clock. Lost/uncertain gaze or leaving a target stops movement.
 
-| Event | `detail` |
-|---|---|
-| `gaze:enter` | `{}` |
-| `gaze:progress` | `{ progress: 0..1 }` (use it to draw a fill ring) |
-| `gaze:leave` | `{}` |
-| `gaze:select` | `{}`, fired once when the dwell completes |
-| `gaze:hold` | `{}`, fired every 150 ms **after** select while the gaze stays on the target (for nav zones) |
+### Media module
 
-Optional attribute `data-gaze-dwell="800"` sets the dwell time in ms (default 800).
-
-**Until Arunya's module is ready**, Sahil uses a tiny mouse-only stub with the same API.
-
-### RTC module (Harnoor → used by Sahil): `apps/web/src/lib/rtc/`
-
-```ts
-export interface RobotStream {
-  remote: MediaStream | null;                      // robot camera + mic → put into <video>
-  state: "idle" | "connecting" | "live" | "fallback" | "failed";
-  fallbackFrameUrl: string | null;                 // object URL of the latest JPEG when state = "fallback"
-}
-// hub = Sahil's hub client: { send(msg): void; on(type, cb): () => void }
-export function useRobotStream(hub: HubClient, opts?: { sendLocal?: MediaStream }): RobotStream;
-```
-
-`sendLocal` is the laptop webcam stream (from `gaze.getCameraStream()`) sent to the phone screen (P1).
+Harnoor owns `apps/web/src/lib/rtc/`. Its planned `useRobotStream(mqttClient, options)` hook uses the application's MQTT event adapter for signalling and returns remote media plus `idle`, `connecting`, `live`, or `failed` state. An optional local camera stream comes from `gaze.getCameraStream()` so the laptop webcam is not opened twice. No separate application command transport is introduced.

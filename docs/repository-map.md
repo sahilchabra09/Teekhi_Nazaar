@@ -11,6 +11,9 @@
 | `docs/firmware-setup.md` | Firmware build, upload, provisioning, and wiring instructions. |
 | `docs/mqtt.md` | MQTT topics, authentication, command fields, units, ranges, and examples. |
 | `docs/robot-operation.md` | Frontend/backend/mobile integration, proposed Topic 1 contract, existing ESP Topic 2 contract, gyro control, and password/security responsibilities. |
+| `docs/PLAN.md`, `docs/interfaces.md` | Team ownership, MQTT application routing, control/session rules, and planned media/conversation events. |
+| `docs/backend-web.md`, `docs/mobile.md`, `docs/hardware-gaze.md` | Component contracts for the MQTT control architecture. |
+| `apps/mobile/` | Placeholder for the planned Kotlin/Android mounted controller; no app implementation yet. |
 
 The firmware is an independent component of this workspace. Build outputs, installed tools, and `bot/include/bot_secrets.h` stay local and are excluded from Git. The committed `bot/include/bot_secrets.example.h` contains configuration placeholders.
 
