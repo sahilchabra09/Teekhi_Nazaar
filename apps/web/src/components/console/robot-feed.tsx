@@ -1,14 +1,20 @@
 "use client";
 
-import { Video } from "lucide-react";
+import { Octagon, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { IrisMark } from "@/components/iris/logo";
+import { COMMAND_LABEL, type RobotCommand } from "@/lib/mqtt/robot";
 import type { RobotStream } from "@/lib/rtc";
 
-import { useDwell } from "./use-dwell";
-
-export type Direction = "forward" | "backward" | "left" | "right";
+/** Click-to-drive on the robot video (docs/controls.md). */
+export type DriveControls = {
+  /** Last command that reached the broker, highlighted on its region. */
+  lastCommand: RobotCommand | null;
+  /** A command is on its way to the broker. */
+  sending: boolean;
+  onCommand: (cmd: RobotCommand) => void;
+};
 
 type Props = {
   stream: MediaStream | null;
@@ -17,14 +23,13 @@ type Props = {
   mediaState?: RobotStream["state"];
   listening?: boolean;
   mirrored?: boolean;
-  driveEnabled: boolean;
-  moving: Direction | null;
+  /** Present → the coloured regions become clickable while robot video is showing. */
+  drive?: DriveControls;
   heard: string | null;
   /** Caption above the heard text, e.g. "Someone nearby said". */
   heardLabel?: string;
   /** Small status pill at the top of the feed, e.g. "Listening…". */
   status?: string | null;
-  onMove: (d: Direction) => void;
   onPreviewWebcam: () => void;
 };
 
@@ -35,14 +40,15 @@ export function RobotFeed({
   mediaState = "idle",
   listening,
   mirrored,
-  driveEnabled,
-  moving,
+  drive,
   heard,
   heardLabel = "Someone nearby said",
   status,
-  onMove,
   onPreviewWebcam,
 }: Props) {
+  // Regions only exist while the robot's camera (stream or JPEG fallback) is on screen;
+  // the green waiting screen is never clickable.
+  const hasFeed = Boolean(stream || fallbackFrameUrl);
   const videoRef = useRef<HTMLVideoElement>(null);
   const localRef = useRef<HTMLVideoElement>(null);
   const [muted, setMuted] = useState(true);
@@ -76,7 +82,10 @@ export function RobotFeed({
       {!stream && !fallbackFrameUrl && <EmptyFeed onPreviewWebcam={onPreviewWebcam} mediaState={mediaState} />}
 
       <GuideLines />
-      <div className="absolute top-3 left-3 flex items-center gap-2 rounded-full bg-pine/85 px-3 py-1.5 text-xs font-semibold text-white">
+      {hasFeed && drive && <DriveRegions drive={drive} />}
+
+      {/* Everything below sits above the regions (z-20), so clicking it never moves the robot. */}
+      <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-pine/85 px-3 py-1.5 text-xs font-semibold text-white">
         <span>{listening ? "Someone is speaking…" : `Robot video · ${mediaState}`}</span>
         {stream && <button type="button" className="rounded-full bg-white/15 px-2 py-1" onClick={() => {
           const nextMuted = playbackError ? false : !muted;
@@ -87,42 +96,37 @@ export function RobotFeed({
           }
         }}>{playbackError ? "Play audio" : muted ? "Enable audio" : "Mute audio"}</button>}
       </div>
-      <div className={localCamera ? "absolute right-4 bottom-4 w-36 overflow-hidden rounded-xl bg-pine shadow-lg ring-1 ring-white/25 sm:w-48" : "hidden"}>
+      {hasFeed && drive && (
+        <button
+          type="button"
+          onClick={() => drive.onCommand("S")}
+          aria-label="Stop the robot"
+          className="absolute top-3 right-3 z-20 flex items-center gap-1.5 rounded-full bg-tomato px-4 py-2 text-sm font-bold text-white shadow-[0_8px_20px_-6px_rgb(228_85_63/0.7)] transition-transform hover:scale-105 active:scale-95"
+        >
+          <Octagon className="size-4" strokeWidth={2.75} />
+          Stop
+        </button>
+      )}
+      <div className={localCamera ? "absolute right-4 bottom-4 z-20 w-36 overflow-hidden rounded-xl bg-pine shadow-lg ring-1 ring-white/25 sm:w-48" : "hidden"}>
         <video ref={localRef} autoPlay playsInline muted aria-label="Your camera shared with the phone" className="aspect-video w-full object-cover" />
         <p className="px-2 py-1 text-center text-xs font-semibold text-white">Your camera → phone</p>
       </div>
 
-      {/* Invisible gaze drive zones along the edges. Only a soft glow shows while one is active.
-          The centre of the feed is a safe zone that never moves the robot. */}
-      {driveEnabled && (
-        <>
-          <EdgeZone dir="forward" onMove={onMove} active={moving === "forward"} />
-          <EdgeZone dir="backward" onMove={onMove} active={moving === "backward"} />
-          <EdgeZone dir="left" onMove={onMove} active={moving === "left"} />
-          <EdgeZone dir="right" onMove={onMove} active={moving === "right"} />
-        </>
-      )}
-
       {/* What someone near the robot just said */}
       {heard && (
-        <div className="pointer-events-none absolute top-[14%] left-1/2 max-w-[70%] -translate-x-1/2 rounded-2xl rounded-bl-sm bg-honey px-5 py-3 text-pine shadow-[0_12px_28px_-10px_rgb(0_0_0/0.45)]">
+        <div className="absolute top-[14%] left-1/2 z-20 max-w-[70%] -translate-x-1/2 rounded-2xl rounded-bl-sm bg-honey px-5 py-3 text-pine shadow-[0_12px_28px_-10px_rgb(0_0_0/0.45)]">
           <p className="text-xs font-semibold opacity-70">{heardLabel}</p>
           <p className="font-display text-[clamp(1.2rem,1.8vw,1.6rem)] leading-tight font-bold">“{heard}”</p>
         </div>
       )}
 
       {status && !heard && (
-        <div className="pointer-events-none absolute top-[14%] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white/90 px-4 py-2 text-sm font-semibold text-pine shadow-lg">
+        <div className="absolute top-[14%] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white/90 px-4 py-2 text-sm font-semibold text-pine shadow-lg">
           <span className="size-2.5 animate-pulse rounded-full bg-honey" />
           {status}
         </div>
       )}
 
-      {moving && (
-        <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-white/90 px-4 py-1.5 text-sm font-semibold text-pine">
-          Moving {moving}
-        </div>
-      )}
     </div>
   );
 }
@@ -174,26 +178,51 @@ function GuideLines() {
   );
 }
 
-const ZONE: Record<Direction, { box: string; glow: string; label: string }> = {
-  forward: { box: "inset-x-[15%] top-0 h-[13%]", glow: "bg-gradient-to-b", label: "Drive forward" },
-  backward: { box: "inset-x-[15%] bottom-0 h-[13%]", glow: "bg-gradient-to-t", label: "Reverse" },
-  left: { box: "inset-y-[15%] left-0 w-[10%]", glow: "bg-gradient-to-r", label: "Turn left" },
-  right: { box: "inset-y-[15%] right-0 w-[10%]", glow: "bg-gradient-to-l", label: "Turn right" },
-};
+/**
+ * Click regions, matching the guide lines:
+ *   outer left 25% = L · outer right 25% = R
+ *   middle 50%: 0–15% U · 15–30% F · 30–70% S (biggest, easy to hit) · 70–85% B · 85–100% D
+ */
+const REGIONS: { cmd: RobotCommand; style: React.CSSProperties }[] = [
+  { cmd: "L", style: { left: 0, top: 0, width: "25%", height: "100%" } },
+  { cmd: "R", style: { left: "75%", top: 0, width: "25%", height: "100%" } },
+  { cmd: "U", style: { left: "25%", top: 0, width: "50%", height: "15%" } },
+  { cmd: "F", style: { left: "25%", top: "15%", width: "50%", height: "15%" } },
+  { cmd: "S", style: { left: "25%", top: "30%", width: "50%", height: "40%" } },
+  { cmd: "B", style: { left: "25%", top: "70%", width: "50%", height: "15%" } },
+  { cmd: "D", style: { left: "25%", top: "85%", width: "50%", height: "15%" } },
+];
 
-function EdgeZone({ dir, onMove, active }: { dir: Direction; onMove: (d: Direction) => void; active: boolean }) {
-  const { ref, dwelling, props } = useDwell<HTMLDivElement>(() => onMove(dir), { ms: 600, repeatMs: 150 });
-  const z = ZONE[dir];
+function DriveRegions({ drive }: { drive: DriveControls }) {
   return (
-    <div
-      ref={ref}
-      {...props}
-      role="button"
-      aria-label={z.label}
-      className={`absolute ${z.box} ${z.glow} from-honey/45 to-transparent transition-opacity duration-300 ${
-        active ? "opacity-100" : dwelling ? "opacity-50" : "opacity-0"
-      }`}
-    />
+    <div className="absolute inset-0 z-10" aria-label="Robot drive controls">
+      {REGIONS.map(({ cmd, style }) => {
+        const active = drive.lastCommand === cmd;
+        const isStop = cmd === "S";
+        return (
+          <button
+            key={cmd}
+            type="button"
+            onClick={() => drive.onCommand(cmd)}
+            aria-label={`${COMMAND_LABEL[cmd]} (${cmd})`}
+            title={`${COMMAND_LABEL[cmd]} (${cmd})`}
+            style={style}
+            className={`group absolute grid cursor-pointer place-items-center outline-none transition-colors focus-visible:bg-white/15 ${
+              active ? (isStop ? "bg-tomato/20" : "bg-honey/20") : "hover:bg-white/10"
+            }`}
+          >
+            <span
+              className={`rounded-full px-3 py-1 font-display text-lg font-extrabold text-white transition-opacity ${
+                active ? (isStop ? "bg-tomato/80 opacity-100" : "bg-honey/80 text-pine opacity-100") : "bg-pine/60 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+              }`}
+            >
+              {cmd} · {COMMAND_LABEL[cmd]}
+              {active && drive.sending ? "…" : ""}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
