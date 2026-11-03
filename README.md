@@ -2,9 +2,9 @@
 
 ESP8266 robot firmware is in [`bot/`](bot/). It provides Wi-Fi setup, MQTT movement commands, motor control, and servo control without IR sensors. Local credentials are configured in an ignored header; see the setup guide before building. See [firmware setup](docs/firmware-setup.md), [MQTT commands](docs/mqtt.md), and [repository map](docs/repository-map.md).
 
-The [robot operation and team integration guide](docs/robot-operation.md) explains the intended frontend/backend → mounted phone → ESP flow, both MQTT command channels, gyro feedback, and password/security behavior.
+The [robot operation and team integration guide](docs/robot-operation.md) explains the intended frontend/backend → mounted phone → ESP flow, both MQTT movement channels, the frontend/backend/mobile WebSocket application links, gyro feedback, and password/security behavior.
 
-Robot control uses MQTT throughout: frontend/backend intentions → mounted phone with gyro correction → ESP8266 wheel commands. The [team plan](docs/PLAN.md) and [shared interfaces](docs/interfaces.md) follow this architecture.
+Movement uses MQTT: frontend/backend intentions → mounted phone with gyro correction → ESP8266 wheel commands. Other application traffic uses WebSocket between frontend ↔ backend ↔ mobile. The [team plan](docs/PLAN.md) and [shared interfaces](docs/interfaces.md) follow this architecture.
 
 This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines Next.js, Hono, and more.
 

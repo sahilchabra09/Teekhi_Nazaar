@@ -11,8 +11,8 @@
 | `docs/firmware-setup.md` | Firmware build, upload, provisioning, and wiring instructions. |
 | `docs/mqtt.md` | MQTT topics, authentication, command fields, units, ranges, and examples. |
 | `docs/robot-operation.md` | Frontend/backend/mobile integration, proposed Topic 1 contract, existing ESP Topic 2 contract, gyro control, and password/security responsibilities. |
-| `docs/PLAN.md`, `docs/interfaces.md` | Team ownership, MQTT application routing, control/session rules, and planned media/conversation events. |
-| `docs/backend-web.md`, `docs/mobile.md`, `docs/hardware-gaze.md` | Component contracts for the MQTT control architecture. |
+| `docs/PLAN.md`, `docs/interfaces.md` | Team ownership, MQTT movement routing, WebSocket application routing, control/session rules, and planned media/conversation events. |
+| `docs/backend-web.md`, `docs/mobile.md`, `docs/hardware-gaze.md` | Component contracts for MQTT movement and WebSocket application links. |
 | `apps/mobile/` | Placeholder for the planned Kotlin/Android mounted controller; no app implementation yet. |
 
 The firmware is an independent component of this workspace. Build outputs, installed tools, and `bot/include/bot_secrets.h` stay local and are excluded from Git. The committed `bot/include/bot_secrets.example.h` contains configuration placeholders.
@@ -38,4 +38,4 @@ The broker and device ID/topics form the current interface. Other clients using 
 
 ## Planned mobile integration
 
-The [robot operation guide](robot-operation.md) describes the intended two-command-channel architecture. Frontend/backend send high-level intentions on a proposed Topic 1; the mounted phone combines them with orientation feedback and publishes the existing timeout-enabled wheel envelope to `carbot/command` (Topic 2). The ESP status channel remains `carbot/status`. The new mobile controller, Topic 1 handling, and backend session coordination are documented future work.
+The [robot operation guide](robot-operation.md) describes the intended two-command-channel architecture. Frontend/backend send high-level intentions on a proposed Topic 1; the mounted phone combines them with orientation feedback and publishes the existing timeout-enabled wheel envelope to `carbot/command` (Topic 2). The ESP status channel remains `carbot/status`. The new mobile controller, Topic 1 handling, and backend session coordination are documented future work. Frontend ↔ backend and backend ↔ phone WebSocket connections carry session, conversation, and media-signalling events; movement intentions and ESP wheel commands remain on MQTT.

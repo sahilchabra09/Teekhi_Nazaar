@@ -17,7 +17,7 @@ Use [firmware setup](firmware-setup.md), [MQTT commands](mqtt.md), [shared inter
 | Status | Publish current output state to `carbot/status` every two seconds. |
 | Credentials | Local ignored header for initial/setup passwords; EEPROM for provisioned Wi-Fi/control settings. No secrets in source or logs. |
 
-The phone, not the ESP, computes gyro correction and validates application session/sequence/expiry. Firmware does not enforce a duration-based movement command, Topic 1 sequence numbers, or control-session ownership. Do not implement a second motor protocol beside the documented MQTT contract.
+The phone, not the ESP, computes gyro correction and validates application session/sequence/expiry. Firmware does not enforce a duration-based movement command, Topic 1 sequence numbers, or control-session ownership. The phone also has a backend WebSocket connection for non-movement application events. The ESP remains an MQTT client; do not connect it to the backend WebSocket hub or introduce another motor protocol.
 
 There are no IR reads, edge fallback maneuvers, IR lockouts, ultrasonic obstacle checks, or distance telemetry. The UI must not advertise obstacle protection. A physical motor-power cutoff is a hardware option for the supervised setup, not a firmware-reported state already implemented here.
 

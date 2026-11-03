@@ -2,9 +2,9 @@
 
 This is the frontend, backend, and mobile integration contract for Teekhi Nazaar. The phone is mounted rigidly on the robot beside the ESP8266, so the phone's motion sensors measure the robot's orientation. Frontend and backend send movement intentions to the phone; the phone uses orientation feedback to calculate wheel commands; the ESP drives the motors.
 
-There are two MQTT **command channels**. Topic 1 carries high-level intentions between the frontend/backend and the phone. Topic 2 carries translated wheel commands from the phone to the ESP. The ESP's existing status topic remains a separate feedback channel.
+There are two MQTT **movement command channels**. Topic 1 carries forward/backward/left/right/speed/stop intentions between the frontend/backend and the phone. Topic 2 carries translated wheel commands from the phone to the ESP. The ESP's existing status topic remains a separate feedback channel. In parallel, frontend ↔ backend and backend ↔ phone use WebSocket for session coordination, conversation, and media signalling.
 
-The ESP firmware described below exists in this repository. Topic 1, the new mobile translation/controller, and backend control-session handling are the planned integration. This documentation adds no mobile, frontend, backend, or firmware implementation. Names, fields, and timings marked **proposed** define a starting contract for those teams; they are not existing ESP features.
+The ESP firmware described below exists in this repository. Topic 1, the mobile translation/controller, the backend WebSocket hub, and control-session handling are the planned integration. This documentation adds no mobile, frontend, backend, or firmware implementation. Names, fields, and timings marked **proposed** define a starting contract for those teams; they are not existing ESP features.
 
 ## System architecture and responsibilities
 
@@ -22,6 +22,8 @@ flowchart LR
     M -->|Typed mobile status messages| T1
     T1 -->|Mobile status| F
     T1 -->|Mobile status| B
+    F <-->|WebSocket application events| B
+    B <-->|WebSocket application events| M
 ```
 
 The phone and ESP are attached mechanically to the same chassis. Their application communication uses MQTT over the network; mounting them together does not establish a USB, Bluetooth, or direct Wi-Fi data connection. Each device needs access to the configured broker. Being on the same local network is insufficient if the broker is unreachable.
@@ -29,11 +31,11 @@ The phone and ESP are attached mechanically to the same chassis. Their applicati
 | Component | Owns |
 | --- | --- |
 | Frontend | Forward, backward, left, right, speed, and STOP controls; sending fresh intentions while a control is held; displaying robot/mobile state. |
-| Backend | User/device authorization, selecting one active control session per robot, automated intentions, and issuing broker credentials with suitable permissions. |
+| Backend | User/device authorization, selecting one active control session per robot, automated MQTT intentions, broker permissions, and routing non-movement application events over its frontend/phone WebSocket connections. |
 | Mounted mobile app | Validating Topic 1 messages, reading/calibrating orientation, calculating gyro corrections, publishing Topic 2 commands, disarming on faults, and relaying status. |
 | ESP8266 | Provisioning Wi-Fi, checking the control password and supported command fields, setting signed wheel effort/servo output, enforcing its existing phone-control timeout, and publishing status. |
 
-Frontend and backend can both originate movement, but only one controller may own a robot at a time. The backend must coordinate ownership so a user's controls and automation do not send conflicting intentions. The mounted phone is the sole normal publisher of wheel commands to Topic 2.
+Frontend and backend can both originate movement, but only one controller may own a robot at a time. The backend must coordinate ownership so a user's controls and automation do not send conflicting intentions. The mounted phone is the sole normal publisher of wheel commands to Topic 2. WebSocket does not provide a second route for movement intentions or raw wheel commands.
 
 There are no IR inputs, edge alerts, automatic reversing at an edge, or IR lockout/re-arm checks. Gyro correction maintains the requested orientation; it does not restore desk-edge detection or detect obstacles.
 
@@ -42,11 +44,24 @@ There are no IR inputs, edge alerts, automatic reversing at an edge, or IR locko
 1. Secure the phone in its final mount and connect the motor hardware using the existing [firmware wiring](firmware-setup.md#existing-wiring). The phone must not rotate independently of the chassis during a session.
 2. When the ESP has no valid saved network or cannot connect, join its `Lain_Setup` access point and open `http://192.168.4.1`.
 3. Set the ESP control password, scan for a 2.4 GHz network, and save its Wi-Fi credentials. The ESP restarts, joins that network, connects to MQTT, subscribes to `carbot/command`, and publishes online status. With valid saved credentials it can connect directly at boot.
-4. Give the mounted mobile app the same ESP control password through its future pairing/settings flow. Connect the phone, frontend, and backend to their permitted broker topics.
+4. Give the mounted mobile app the same ESP control password through its future pairing/settings flow. Connect movement clients to their permitted MQTT topics. Separately connect frontend and phone to the authenticated backend WebSocket hub for application/session events.
 5. Calibrate the phone while the robot is stationary. Map phone axes to robot forward and vertical axes, establish the initial heading, and confirm clockwise/counterclockwise sign conventions.
-6. Enable a control session only after calibration, fresh orientation readings, broker connectivity, and a recent full ESP status are available. The initial minimal online message alone does not prove calibration or password correctness. Drive only after an explicit enable action.
+6. Enable a control session only after calibration, fresh orientation readings, MQTT broker connectivity, required backend/session readiness, and a recent full ESP status are available. The initial minimal online message alone does not prove calibration or password correctness. Drive only after an explicit enable action.
 
 The Wi-Fi setup access point is a provisioning service. It does not provide the phone with an internet connection or configure mobile broker credentials. Reconnect the phone to a suitable network after provisioning. Firmware build/upload details remain in [firmware setup](firmware-setup.md).
+
+## Application connections
+
+| Link | Transport and purpose |
+| --- | --- |
+| Frontend ↔ backend | WebSocket for authenticated session coordination, conversation UI events, and media signalling. |
+| Backend ↔ mobile phone | WebSocket for session state, speech/TTS events, and media signalling. |
+| Frontend/backend → mobile phone | MQTT Topic 1 for movement intentions, plus returned movement `mobile_status`. |
+| Mobile phone ↔ ESP8266 | MQTT Topic 2 commands and ESP status. |
+
+The planned hub endpoints are `/ws?role=web` and `/ws?role=phone`, served by the backend. Use WSS and authenticate each application connection in deployment. The phone has both a backend WebSocket client and an MQTT client; these have distinct readiness/failure states. The frontend also uses both connections. WebRTC media and HTTPS utterance uploads remain separate media paths. See [shared interfaces](interfaces.md) for event routing.
+
+WebSocket and gRPC are separate protocols. The application links here retain WebSocket from the hub design. A gRPC implementation would need a separately agreed service and browser/phone client contract, while leaving the movement MQTT interface intact; see [gRPC concepts](https://grpc.io/docs/what-is-grpc/core-concepts/).
 
 ## MQTT channels and message contracts
 
@@ -216,6 +231,8 @@ These proposed application timings use the ESP's existing fixed timeout:
 
 Topic 1 expiry matters even when Topic 2 is healthy. If frontend/backend disconnects but the phone keeps re-publishing the last movement, the ESP's timeout never expires. The phone must stop/disarm when the upstream intention expires, its session is revoked, orientation becomes unavailable/stale, calibration is lost, ESP status becomes stale, or the control app becomes inactive. If it cannot send a stop because its broker connection failed, it stops publishing; the existing ESP phone timeout provides the fallback when the firmware loop continues running. None of these software paths substitutes for a physical power stop.
 
+Application WebSocket keepalives and conversation/media events never renew a movement intention. A required backend/session connection failure disarms control even if the MQTT broker is reachable. The backend must not reissue a cached movement to hide frontend inactivity.
+
 Use a clean command session and avoid persisting/queuing movement messages for delivery after reconnect. On reconnect remain disarmed, discard cached movement, and require fresh readiness and explicit enable. Defer new movement until a stop/disarm transition has been completed in the application; do not replay old queued drive packets after it.
 
 Proposed Topic 1 commands use QoS 1 with `retain=false`; deduplicate by session and sequence. MQTT QoS 1 can deliver a message more than once, and retained messages are delivered to new subscribers, so neither a duplicate nor an old retained movement may start a new maneuver. Broker delivery acknowledgement is distinct from application/robot execution. These are MQTT protocol properties in the [OASIS MQTT specification](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html).
@@ -249,13 +266,15 @@ Use a private broker with authenticated clients, encrypted connections, and topi
 | ESP | Subscription to Topic 2 and publication of its own status. |
 | Other accounts/devices | No access to this robot's channels or credentials. |
 
+The backend WebSocket links use application authentication and WSS separately from MQTT credentials. Securing those links does not encrypt the ESP's current MQTT connection.
+
 The mobile app adds the ESP password after translating an authorized intention. The frontend uses application login and scoped broker credentials rather than exposing the ESP shared secret. Backend ownership checks and broker permissions enforce who can issue intentions; a typed JSON field such as `source` is not proof of identity.
 
 Moving the existing ESP to a protected broker requires a future coordinated firmware/configuration change for TLS, certificate validation, broker authentication, and any per-device topic names. Merely changing port 1883 to 8883 is insufficient. The current `carbot/command` namespace and `esp12e_carbot` ID are shared identifiers; passwords and topic names alone do not isolate multiple robots. A fleet needs unique identities and broker topic permissions with matching firmware changes. No such security implementation or broker migration is performed by this documentation.
 
 ## Team handoff and acceptance criteria
 
-Frontend/backend implement the proposed Topic 1 schema and agree one active authorized controller per robot. The mobile team implements the mount calibration, gyro feedback, command translation, timing, and status relay. The current ESP stays on its documented Topic 2 contract until a separately coordinated interface/security change.
+Frontend/backend implement the proposed MQTT Topic 1 schema and agree one active authorized controller per robot. Their WebSocket hub handles application/session/conversation/media events without relaying motor commands. The mobile team implements the mount calibration, gyro feedback, command translation, timing, and status relay. The current ESP stays on its documented Topic 2 contract until a separately coordinated interface/security change.
 
 Before enabling real driving, the integration should demonstrate:
 

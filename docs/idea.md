@@ -7,7 +7,7 @@
 **Selected problem statement:** **PS-02 — Zero-Prompt AI (Kill the Chatbox)**  
 **Project stage:** Hackathon prototype / proof of concept
 
-**Control architecture:** MQTT intentions → mounted phone with gyro correction → ESP8266 wheel commands. [Robot operation](robot-operation.md) defines this path, and [MQTT commands](mqtt.md) describes the existing firmware. The mobile/frontend/backend integration is planned work.
+**Control architecture:** MQTT intentions → mounted phone with gyro correction → ESP8266 wheel commands. Frontend ↔ backend ↔ phone use WebSocket for session, conversation, and media-signalling traffic. [Robot operation](robot-operation.md) defines this path, and [MQTT commands](mqtt.md) describes the existing firmware. The mobile/frontend/backend integration is planned work.
 
 ---
 
@@ -120,6 +120,8 @@ flowchart TD
     G --> UI[IRIS control interface]
     UI -->|High-level intentions| T1[MQTT Topic 1]
     B[Backend session authorization] --> T1
+    UI <-->|WebSocket application events| B
+    B <-->|WebSocket application events| PHONE
     T1 --> PHONE[Mounted phone and gyro controller]
     PHONE -->|Signed wheel envelope| T2[MQTT Topic 2]
     T2 --> ESP[ESP8266 motor controller]
@@ -129,8 +131,8 @@ flowchart TD
     PHONE -->|Live camera and audio| UI
     PHONE -->|Utterance upload| STT[Speech-to-text service]
     STT --> LLM[AI reply suggestions]
-    LLM -->|MQTT suggestions| UI
-    UI -->|Confirmed speech over MQTT| PHONE
+    LLM -->|Backend WebSocket suggestions| UI
+    UI -->|Confirmed speech over WebSocket hub| PHONE
 ```
 
 ### Practical hardware
@@ -153,8 +155,9 @@ flowchart TD
 |---|---|
 | Gaze | WebGazer.js or a tested MediaPipe-based gaze/face pipeline |
 | User interface | React / JavaScript web app with large target buttons |
-| Robot networking | MQTT broker with Topic 1 intentions and Topic 2 wheel commands |
-| Video/audio | WebRTC media with signalling over MQTT; HTTPS for utterance upload |
+| Robot movement networking | MQTT broker with Topic 1 intentions and Topic 2 wheel commands |
+| Application networking | Frontend ↔ backend and backend ↔ phone over WebSocket |
+| Video/audio | WebRTC media with signalling over the WebSocket hub; HTTPS for utterance upload |
 | Voice activity detection | Browser audio activity detection or VAD library |
 | Speech-to-text | Whisper / browser or cloud speech recognizer |
 | AI suggestions | Gemini/OpenAI-compatible LLM API, with short structured output |
@@ -201,7 +204,7 @@ flowchart TD
 
 The phone translates intentions into the exact ESP wheel envelope in [MQTT commands](mqtt.md); the ESP does not parse `drive_intent`. Example times are illustrative, so publishers must use fresh current timestamps.
 
-**AI suggestions body (illustrative; the Topic 1 envelope adds `type:"suggestions"`, `device_id`, `control_session_id`, and `ts`):**
+**AI suggestions body (illustrative; the backend WebSocket event envelope adds `type:"suggestions"`, `device_id`, `control_session_id`, and `ts`):**
 
 ```json
 {
