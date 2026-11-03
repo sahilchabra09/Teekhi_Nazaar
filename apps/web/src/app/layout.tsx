@@ -26,7 +26,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${bricolage.variable} ${figtree.variable} font-sans antialiased`}>
+      {/* suppressHydrationWarning: browser extensions (e.g. ColorZilla) add attributes to <body> */}
+      <body className={`${bricolage.variable} ${figtree.variable} font-sans antialiased`} suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>
