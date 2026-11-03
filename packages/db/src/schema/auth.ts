@@ -7,6 +7,8 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
+  /** "patient" | "doctor"; null until the user picks a role after sign-up (RBAC, docs/care.md). */
+  role: text("role"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
     .defaultNow()
