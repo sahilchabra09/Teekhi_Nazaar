@@ -25,6 +25,18 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeater = useRef<ReturnType<typeof setInterval> | null>(null);
   const [dwelling, setDwelling] = useState(false);
+  /**
+   * A target that appears under a pointer/gaze that is already resting there (e.g. the card in the
+   * same spot on the next screen) must not select itself. It only arms once the pointer has left it,
+   * or if the first enter happens after a short grace period.
+   */
+  const mountedAt = useRef(0);
+  const armed = useRef(false);
+  useEffect(() => {
+    mountedAt.current = performance.now();
+    armed.current = false;
+  }, []);
+  const mayStart = () => armed.current || performance.now() - mountedAt.current > 700;
 
   useEffect(() => {
     cb.current = onSelect;
@@ -45,10 +57,16 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
 
   const start = useCallback(() => {
     if (disabled) return;
+    if (!mayStart()) return; // resting pointer from the previous screen
+    armed.current = true;
     clear();
     setDwelling(true);
     timer.current = setTimeout(fire, ms);
   }, [clear, disabled, fire, ms]);
+
+  const leave = useCallback(() => {
+    armed.current = true; // pointer really moved: next enter may dwell
+  }, []);
 
   const cancel = useCallback(() => {
     clear();
@@ -59,9 +77,12 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const onEnter = () => !disabled && setDwelling(true);
-    const onLeave = () => cancel();
-    const onSel = () => !disabled && fire();
+    const onEnter = () => !disabled && mayStart() && setDwelling(true);
+    const onLeave = () => {
+      leave();
+      cancel();
+    };
+    const onSel = () => !disabled && mayStart() && fire();
     const onHold = () => !disabled && repeatMs && cb.current();
     el.addEventListener("gaze:enter", onEnter);
     el.addEventListener("gaze:leave", onLeave);
@@ -73,7 +94,7 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
       el.removeEventListener("gaze:select", onSel);
       el.removeEventListener("gaze:hold", onHold);
     };
-  }, [cancel, disabled, fire, repeatMs]);
+  }, [cancel, disabled, fire, leave, repeatMs]);
 
   useEffect(() => clear, [clear]);
   useEffect(() => {
@@ -89,7 +110,10 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
       "data-dwelling": dwelling,
       style: { "--dwell-ms": `${ms}ms` } as React.CSSProperties,
       onPointerEnter: start,
-      onPointerLeave: cancel,
+      onPointerLeave: () => {
+        leave();
+        cancel();
+      },
       onClick: () => {
         if (disabled) return;
         cancel();
