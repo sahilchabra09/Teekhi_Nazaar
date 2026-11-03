@@ -1,6 +1,6 @@
 "use client";
 
-import { Ear, LifeBuoy, LogOut, MessageSquareText, Navigation, OctagonX, Phone, ScanEye, Square, Volume2, X } from "lucide-react";
+import { Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, Square, TriangleAlert, Volume2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -8,6 +8,10 @@ import { toast } from "sonner";
 import { IrisMark } from "@/components/iris/logo";
 import { runAuthAction } from "@/lib/auth-actions";
 import { authClient } from "@/lib/auth-client";
+import { APPLIANCE_PINS, type AppliancePin, useAppliances } from "@/lib/mqtt/appliances";
+import { broker, useBrokerStatus } from "@/lib/mqtt/broker";
+import { type RobotCommand, sendRobotCommand, stopRobotBestEffort } from "@/lib/mqtt/robot";
+import { useControlSettings } from "@/lib/mqtt/settings";
 import { conversationReducer, initialConversation } from "@/lib/robot/conversation";
 import type { ConsoleView as View, ReplySource } from "@/lib/robot/conversation";
 import { useRobotConnection } from "@/lib/robot/use-robot-connection";
@@ -16,6 +20,7 @@ import { UtteranceRecorder } from "@/lib/talk/recorder";
 import { speakAloud, stopSpeaking } from "@/lib/talk/speak";
 
 import { ConnectionBar } from "./connection-bar";
+import { ControlSettingsDialog, ControlsChip } from "./control-settings";
 import { MicPicker, readSavedMic } from "./mic-picker";
 import { RobotFeed } from "./robot-feed";
 import { type PanelCard, SidePanel } from "./side-panel";
@@ -45,6 +50,93 @@ export default function Console({ userName }: { userName: string }) {
   const confirm = (text: string, from: View, source: ReplySource = "phrase") => setView({ name: "confirm", text, source, from });
 
   useEffect(() => setMicId(readSavedMic()), []);
+
+  // ───────────────────── direct browser MQTT: robot driving + appliances (docs/controls.md) ─────────────────────
+
+  useEffect(() => broker.acquire(), []); // one shared connection for both features
+  const brokerState = useBrokerStatus();
+  const controls = useControlSettings();
+  const appliances = useAppliances();
+  const [settings, setSettings] = useState<{ open: boolean; reason: string | null }>({ open: false, reason: null });
+  const openSettings = useCallback((reason: string | null = null) => setSettings({ open: true, reason }), []);
+
+  // Surface connection problems once per distinct message.
+  const lastBrokerError = useRef<string | null>(null);
+  useEffect(() => {
+    const message = brokerState.status === "connected" ? null : brokerState.error;
+    if (message && message !== lastBrokerError.current) toast.error(message);
+    lastBrokerError.current = message;
+  }, [brokerState.status, brokerState.error]);
+
+  const hasFeed = Boolean(connection.media.remote || connection.media.fallbackFrameUrl);
+  const [lastCommand, setLastCommand] = useState<RobotCommand | null>(null);
+  const [sendingCommand, setSendingCommand] = useState<RobotCommand | null>(null);
+  const moved = useRef(false); // a movement command was sent and no stop since
+  const robotPassword = useRef(controls.robotPassword);
+  useEffect(() => {
+    robotPassword.current = controls.robotPassword;
+  }, [controls.robotPassword]);
+
+  const drive = useCallback(
+    async (cmd: RobotCommand) => {
+      if (!controls.robotPassword) {
+        if (cmd === "S") stopRobotBestEffort(robotPassword.current);
+        return openSettings("Enter the robot password to drive from the video.");
+      }
+      setSendingCommand(cmd);
+      try {
+        await sendRobotCommand(cmd, controls.robotPassword);
+        setLastCommand(cmd);
+        moved.current = cmd !== "S";
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Couldn’t send the drive command.");
+      } finally {
+        setSendingCommand(null);
+      }
+    },
+    [controls.robotPassword, openSettings],
+  );
+
+  // Best-effort stop when the robot video disappears…
+  const hadFeed = useRef(hasFeed);
+  useEffect(() => {
+    if (hadFeed.current && !hasFeed) {
+      if (moved.current) stopRobotBestEffort(robotPassword.current);
+      moved.current = false;
+      setLastCommand(null);
+    }
+    hadFeed.current = hasFeed;
+  }, [hasFeed]);
+
+  // …and when the user leaves the control screen (tab hidden, page closed, console unmounted).
+  useEffect(() => {
+    const stop = () => {
+      if (!moved.current) return;
+      stopRobotBestEffort(robotPassword.current);
+      moved.current = false;
+    };
+    const onVisibility = () => document.visibilityState === "hidden" && stop();
+    window.addEventListener("pagehide", stop);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", stop);
+      document.removeEventListener("visibilitychange", onVisibility);
+      stop();
+    };
+  }, []);
+
+  const toggleAppliance = useCallback(
+    async (pin: AppliancePin) => {
+      if (!controls.appliancePassword) return openSettings("Enter the appliance password to switch appliances.");
+      if (appliances.pending[pin]) return; // already on its way
+      try {
+        await appliances.toggle(pin, controls.appliancePassword);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Couldn’t switch the appliance.");
+      }
+    },
+    [appliances, controls.appliancePassword, openSettings],
+  );
 
   // ── events from the robot phone over the hub (docs/interfaces.md §3)
   useEffect(() => {
@@ -239,7 +331,7 @@ export default function Console({ userName }: { userName: string }) {
   const home: View = { name: "home" };
   let heading = "What would you like to do?";
   let back: { label: string; onSelect: () => void } | undefined;
-  let extra: { label: string; onSelect: () => void } | undefined;
+  let extra: { label: string; onSelect: () => void; icon?: "refresh" | "settings" } | undefined;
   let cards: PanelCard[] = [];
   let feedStatus: string | null = null;
 
@@ -249,11 +341,24 @@ export default function Console({ userName }: { userName: string }) {
         {
           kind: "action",
           key: "drive",
-          title: "Driving unavailable",
-          hint: "MQTT control session required",
+          title: hasFeed ? "Drive from the video" : "Driving: no video",
+          hint: !hasFeed
+            ? "Connect the robot phone first"
+            : brokerState.status !== "connected"
+              ? "Controls are connecting…"
+              : !controls.robotPassword
+                ? "Set the robot password"
+                : "Click a region · centre stops",
           icon: Navigation,
-          tone: "plain",
-          onSelect: () => toast("The MQTT controller/session publisher is not connected. Motor control stays off."),
+          tone: hasFeed && brokerState.status === "connected" && controls.robotPassword ? "teal" : "plain",
+          onSelect: () =>
+            !controls.robotPassword
+              ? openSettings("Enter the robot password to drive from the video.")
+              : toast(
+                  hasFeed
+                    ? "Click the video: L/R turn, F/B forward and back, U/D up and down, the big middle area stops. The red Stop button stops too."
+                    : "Driving works once the robot’s camera is on screen.",
+                ),
         },
         {
           kind: "action",
@@ -264,7 +369,15 @@ export default function Console({ userName }: { userName: string }) {
           tone: "honey",
           onSelect: () => void startListening(),
         },
-        { kind: "action", key: "help", title: "Help", hint: "Caregiver, eyes, stop", icon: LifeBuoy, tone: "sky", onSelect: () => setView({ name: "help" }) },
+        {
+          kind: "action",
+          key: "appliances",
+          title: "Appliances",
+          hint: "Switch things on and off",
+          icon: Lightbulb,
+          tone: "sky",
+          onSelect: () => setView({ name: "appliances" }),
+        },
       ];
       break;
 
@@ -313,35 +426,33 @@ export default function Console({ userName }: { userName: string }) {
       }));
       break;
 
-    case "help":
-      heading = "Help";
+    case "appliances":
+      // Three appliances, three cards, like every other screen.
+      heading = "Appliances";
       back = { label: "Back", onSelect: () => setView(home) };
-      cards = [
-        {
+      extra = { label: "Password", icon: "settings", onSelect: () => openSettings() };
+      cards = APPLIANCE_PINS.map((pin, i) => {
+        const state = appliances.states[pin];
+        const pending = appliances.pending[pin];
+        const noReply = appliances.unconfirmed[pin];
+        return {
           kind: "action",
-          key: "caregiver",
-          title: "Ask for help",
-          icon: Phone,
-          tone: "honey",
-          onSelect: () => confirm("Please come here. I need assistance.", view, "system"),
-        },
-        {
-          kind: "action",
-          key: "recalibrate",
-          title: "Recalibrate my eyes",
-          icon: ScanEye,
-          tone: "sky",
-          onSelect: () => toast("Calibration starts once eye tracking is connected."),
-        },
-        {
-          kind: "action",
-          key: "stop",
-          title: "Stop the robot",
-          icon: OctagonX,
-          tone: "tomato",
-          onSelect: () => toast("Use STOP on the mounted phone. This console has no authorized MQTT drive connection yet."),
-        },
-      ];
+          key: pin,
+          title: `Appliance ${i + 1}`,
+          hint: pending
+            ? `Turning ${pending}…`
+            : noReply
+              ? "No reply. Check the password"
+              : state === "on"
+                ? "On · look here to turn off"
+                : state === "off"
+                  ? "Off · look here to turn on"
+                  : "State unknown",
+          icon: pending ? Loader2 : noReply ? TriangleAlert : state === "on" ? Lightbulb : LightbulbOff,
+          tone: state === "on" ? "teal" : "plain",
+          onSelect: () => void toggleAppliance(pin),
+        } satisfies PanelCard;
+      });
       break;
 
     case "suggestions": {
@@ -404,13 +515,11 @@ export default function Console({ userName }: { userName: string }) {
             localCamera={connection.camera}
             fallbackFrameUrl={connection.media.fallbackFrameUrl}
             mediaState={connection.media.state}
-            driveEnabled={false}
-            moving={null}
+            drive={{ lastCommand: sendingCommand ?? lastCommand, sending: sendingCommand !== null, onCommand: (cmd) => void drive(cmd) }}
             heard={heard}
             heardLabel={view.name === "suggestions" && view.lowConfidence ? "I think they said" : "Someone nearby said"}
             status={feedStatus}
             listening={conversation.activeSpeech || (view.name === "listening" && view.speaking)}
-            onMove={() => {}}
             onPreviewWebcam={() => void connection.openCamera()}
           />
         </div>
@@ -424,7 +533,10 @@ export default function Console({ userName }: { userName: string }) {
           footer={
             <div className="flex flex-col gap-1 px-1 pt-1">
               {/* which mic "Say something" listens with (the robot phone's mic once its STT is wired) */}
-              <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />
+              <div className="flex min-w-0 items-center justify-between gap-1">
+                <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />
+                <ControlsChip onOpen={() => openSettings()} />
+              </div>
               <div className="flex items-center gap-2">
                 <IrisMark size={26} />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-pine-soft">{userName}</span>
@@ -442,6 +554,7 @@ export default function Console({ userName }: { userName: string }) {
           }
         />
       </div>
+      <ControlSettingsDialog open={settings.open} reason={settings.reason} onClose={() => setSettings({ open: false, reason: null })} />
     </main>
   );
 }
