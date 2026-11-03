@@ -14,7 +14,11 @@
   "dependencies": {
     "@Teekhi_Nazaar/auth": "workspace:*",
     "@Teekhi_Nazaar/db": "workspace:*",
+    "@ai-sdk/provider": "4.0.35",
+    "@openrouter/ai-sdk-provider": "3.1.0",
+    "ai": "7.0.162",
     "better-auth": "catalog:",
+    "drizzle-orm": "catalog:",
     "hono": "^4.13.7",
     "varlock": "catalog:",
     "zod": "catalog:"
