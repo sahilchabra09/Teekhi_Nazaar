@@ -4,7 +4,7 @@
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/web/`, `apps/server/`, `packages/` | Better Auth web console and API, account-bound phone sign-in codes and authenticated media relay. STT/AI suggestions and robot ownership/MQTT publisher grants remain integration work. |
+| `apps/web/`, `apps/server/`, `packages/` | Shared Better Auth Google sign-in, Android OAuth returns with PKCE, account-isolated media relay, care/RBAC and Talk APIs. The phone WAV bridge and robot ownership/MQTT publisher grants remain integration work. |
 | `apps/mobile/` | Native IRIS Android companion with the frontend's clay styling, shared account sign-in, secure credential storage, Kotlin protocol/audio/controller core and device checklist. The development mock is an isolated protocol-test fixture. |
 | `bot/src/main.cpp` | ESP-12E firmware for motor/servo control and Wi-Fi provisioning, without IR sensors. |
 | `bot/platformio.ini` | Board, framework, library dependencies, serial speeds, and Apple Silicon compiler configuration. |

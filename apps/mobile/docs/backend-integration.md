@@ -6,23 +6,25 @@ The authenticated console at `/` uses `useRobotConnection` and the shared `creat
 
 `NEXT_PUBLIC_SERVER_URL` points to the **same** Better Auth and media API (normally port 3000). The independent media URL override has been removed. On the phone, use that server's LAN IP or HTTPS hostname. See the [first-run instructions](../README.md#first-run).
 
-The backend now authenticates both roles and isolates rooms by the user ID obtained from Better Auth. STT/AI suggestions, robot ownership, MQTT intention publishing and controller leases remain integration work. Pairing an account does not grant motor control. The unauthenticated development hub is only a test fixture.
+The backend authenticates both media roles and isolates rooms by the user ID obtained from Better Auth. The integrated `/api/talk/*` routes provide speech/replies with configured providers; the phone's separate `/api/utterance` bridge, robot ownership, MQTT intention publishing and controller leases remain integration work. Signing in does not grant motor control or doctor permissions. Role onboarding, care and Talk routes stay mounted beside the robot gateway. The unauthenticated development hub is only a test fixture.
 
 ## Implemented account authorization
 
 | Route | Authorization and behavior |
 | --- | --- |
-| `POST /api/mobile/link-code` | Live Better Auth browser cookie and exact trusted Origin; issues a one-use 12-hex-character code for five minutes. Regeneration invalidates the previous code from that laptop session. |
-| `POST /api/mobile/link` | Native client exchanges the code for a random credential and verified user identity. Ten attempts per minute per direct client IP; no caller-supplied forwarded IP is trusted. |
+| `POST /api/mobile/oauth/start` | Native app sends fresh state and an S256 PKCE challenge; receives a browser authorization URL valid for five minutes. |
+| `GET /api/mobile/oauth/authorize` | Opens the existing Better Auth Google provider, forwarding its state cookie to the external browser. Google returns to the existing registered `/api/auth/callback/google`. |
+| `GET /api/mobile/oauth/callback` | Validates a private server callback key and the new Better Auth session, then returns to the fixed Android URI with the app state and a one-use 60-second authorization code. No long-lived credential enters the return URL. |
+| `POST /api/mobile/oauth/exchange` | App automatically exchanges the browser return using its private PKCE verifier; receives a native credential and the authenticated user identity. Ten OAuth start/exchange attempts per minute per direct client IP. |
 | `POST /api/mobile/web-ticket` | Live browser session and trusted Origin; issues a one-use WebSocket ticket valid for 30 seconds. |
 | `GET /api/mobile/me` | Native bearer credential; revalidates its parent Better Auth session. |
 | `POST /api/mobile/logout` | Native bearer credential; revokes it and closes its active socket. |
 | `GET /ws?role=phone` | Native bearer Authorization header; user identity determines the room. |
 | `GET /ws?role=web&ticket=…` | Trusted browser Origin and consumed ticket; user identity determines the room. |
 
-Phone credentials last at most 24 hours, never beyond the parent session. Laptop sign-out invalidates the phone; active sockets check their parent session every 15 seconds and close on invalidation or validation failure. A new link from the same laptop session invalidates its previous phone credential. Replaced roles close with 4001; account revocation closes with 1008. Clients stop retrying these terminal failures.
+The old `/api/mobile/link-code` and `/api/mobile/link` routes are removed. Both devices independently use the same Google identity and Better Auth account database; media room selection uses the verified account ID. Phone credentials last at most 24 hours, never beyond the phone's parent Better Auth session. Signing out on the laptop closes its socket without signing out the independent phone session. Active sockets revalidate every 15 seconds and close on revocation or validation failure. Replaced roles close with 4001; account revocation closes with 1008. Clients stop retrying these terminal failures.
 
-Codes, credentials and tickets are retained only as hashes in a bounded, expiring in-memory store; parent session cookies remain server-side for Better Auth revalidation. API restart requires linking again. Multiple API instances require a shared atomic TTL store before deployment. Mobile JSON endpoints are size-limited and return `Cache-Control: no-store`. No request URL logger records WebSocket tickets. The relay limits payload size, per-peer message rate and queued output, and permits only role-appropriate media/speech events. It never relays a `drive_intent`. Client-provided account IDs do not select a room. Confirmed `speak` uses device TTS; arbitrary audio URLs are not accepted from the browser.
+Issued codes, credentials and tickets are indexed only by hashes in bounded, expiring in-memory stores; PKCE challenge/state and parent session cookies remain server-side for validation. API restart requires signing in again. Multiple API instances require a shared atomic TTL store before deployment. Mobile endpoints return `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. Only fixed callback locations are used; custom redirect destinations are not accepted. Google secrets stay in the server environment. No request URL logger records OAuth parameters or WebSocket tickets. The relay limits payload size, per-peer message rate and queued output, and permits only role-appropriate media/speech events. It never relays a `drive_intent`. Client-provided account IDs do not select a room. Confirmed `speak` uses device TTS; arbitrary audio URLs are not accepted from the browser.
 
 ## Existing media/conversation contract
 

@@ -4,10 +4,11 @@ Automated compilation/tests are separate from these hardware checks. Record actu
 
 | Check | Procedure | Actual result / measurement |
 | --- | --- | --- |
-| Fresh install | Sign in on laptop, generate Link phone code; enter LAN backend address and code on phone; check matching email; grant both permissions and start | Pending |
+| Fresh install | Continue with Google on laptop and phone using the same email; verify browser returns to IRIS; grant both permissions and start | Phone Google sign-in/return confirmed by user; media check pending |
 | Clay UI | Check mint background, raised rounded cards and shaded teal/honey buttons; inspect setup, camera waiting view and Controls at large Android font size | Pending |
 | Account isolation | Use a second laptop account; verify it cannot see this phone or send it speech | Automated relay checks pass; physical test pending |
-| Account revocation | Sign out on laptop; verify phone stops within 15 seconds and needs a new code. Phone sign-out must leave laptop signed in. | Automated checks pass; physical test pending |
+| Account revocation | Sign out on either device and verify its connection closes while the other remains signed in. Revoke the phone's parent auth session and verify it stops within 15 seconds. | Automated checks pass; physical test pending |
+| OAuth recovery | Cancel Google sign-in, retry, and test Android process recreation while browser is open; reject expired, wrong-state and replayed returns | Automated PKCE/callback tests pass; physical recovery check pending |
 | Camera and audio | Phone video/audio arrives in the main web console; wave to measure delay | Pending; target video start <3 s and delay <0.5 s |
 | Frontend camera on phone | Connect the main console, grant camera access, verify webcam preview and main phone video; disconnect/disable the frontend camera and verify waiting state | Pending |
 | Speech playback | Send queued speech twice; hear loudspeaker in a noisy room; verify one started/finished pair per ID | Pending; target first playback <1 s |

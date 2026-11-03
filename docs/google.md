@@ -74,4 +74,18 @@ Each new address needs to be added in **both** places:
 - Google client → **Authorized JavaScript origins** and **Authorized redirect URIs** (`https://<server-domain>/api/auth/callback/google`)
 - `apps/server/.env` → `BETTER_AUTH_URL`, `CORS_ORIGIN`
 
-Google doesn't accept raw IP addresses like `http://192.168.x.x` as redirect URIs, so for LAN access use a domain or a tunnel (e.g. `cloudflared`). For the hackathon, sign in on the laptop through `localhost`.
+Google doesn't accept private LAN IP addresses like `http://192.168.x.x` as web-client redirect URIs. For Wi-Fi-only phone sign-in, use a reachable HTTPS domain or tunnel. See Google's [web-server OAuth redirect requirements](https://developers.google.com/identity/protocols/oauth2/web-server).
+
+## Android Google sign-in
+
+The native **Continue with Google** button opens the external browser through the same Better Auth Google provider. Google returns to the server's existing `/api/auth/callback/google` endpoint; the server then returns to `com.iris.robot://oauth/callback`, which opens IRIS. A private PKCE verifier protects the final app exchange. There is no OTP or manual laptop-linking screen, and no Google client secret is embedded in the APK. Sign in with the **same Google email on both devices**; the API routes media using the resulting verified account ID.
+
+For the current USB development setup, keep `BETTER_AUTH_URL=http://localhost:3000` and the existing Google redirect URI unchanged. Run:
+
+```powershell
+./.tooling/android-sdk/platform-tools/adb.exe reverse tcp:3000 tcp:3000
+```
+
+On the phone, use backend `localhost:3000`, enable local HTTP, and tap **Continue with Google**. USB forwarding makes the phone browser's localhost reach the laptop. Keep the USB connection during sign-in and API use; reconnecting USB may require running the forwarding command again. The phone and laptop still need a shared LAN for WebRTC.
+
+Without USB, set a phone-accessible HTTPS `BETTER_AUTH_URL`, add its exact `https://<server-domain>/api/auth/callback/google` to Google Cloud, and point both app and frontend at that API. Do not change the Google redirect URI to the Android custom scheme: Google returns to Better Auth first. See [Better Auth's OAuth security model](https://better-auth.com/docs/reference/security).
