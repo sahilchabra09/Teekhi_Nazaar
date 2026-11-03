@@ -1,27 +1,11 @@
-import { Hono } from "hono";
-import { cors } from "hono/cors";
-import { logger } from "hono/logger";
-
 import { ENV } from "./env.server";
 import { auth } from "./services";
+import { createRobotGateway } from "./mobile/gateway";
 
-const app = new Hono();
-
-app.use(logger());
-app.use(
-  "/*",
-  cors({
-    origin: ENV.CORS_ORIGIN,
-    allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  }),
-);
-
-app.on(["POST", "GET"], "/api/auth/*", async (c) => auth.handler(c.req.raw));
-
-app.get("/", (c) => {
-  return c.text("OK");
+const gateway = createRobotGateway({
+  origin: ENV.CORS_ORIGIN,
+  authHandler: (request) => auth.handler(request),
+  resolve: (headers) => auth.api.getSession({ headers, query: { disableCookieCache: true, disableRefresh: true } }),
 });
-
-export default app;
+// Do not log request URLs: WebSocket URLs contain short-lived, single-use tickets.
+export default { ...gateway, hostname: "0.0.0.0", port: Number(process.env.PORT ?? 3000) };
