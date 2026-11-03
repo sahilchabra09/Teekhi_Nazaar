@@ -15,11 +15,15 @@ type Props = {
   driveEnabled: boolean;
   moving: Direction | null;
   heard: string | null;
+  /** Caption above the heard text, e.g. "Someone nearby said". */
+  heardLabel?: string;
+  /** Small status pill at the top of the feed, e.g. "Listening…". */
+  status?: string | null;
   onMove: (d: Direction) => void;
   onPreviewWebcam: () => void;
 };
 
-export function RobotFeed({ stream, mirrored, driveEnabled, moving, heard, onMove, onPreviewWebcam }: Props) {
+export function RobotFeed({ stream, mirrored, driveEnabled, moving, heard, heardLabel = "Someone nearby said", status, onMove, onPreviewWebcam }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -57,8 +61,15 @@ export function RobotFeed({ stream, mirrored, driveEnabled, moving, heard, onMov
       {/* What someone near the robot just said */}
       {heard && (
         <div className="pointer-events-none absolute top-[14%] left-1/2 max-w-[70%] -translate-x-1/2 rounded-2xl rounded-bl-sm bg-honey px-5 py-3 text-pine shadow-[0_12px_28px_-10px_rgb(0_0_0/0.45)]">
-          <p className="text-xs font-semibold opacity-70">Someone nearby said</p>
+          <p className="text-xs font-semibold opacity-70">{heardLabel}</p>
           <p className="font-display text-[clamp(1.2rem,1.8vw,1.6rem)] leading-tight font-bold">“{heard}”</p>
+        </div>
+      )}
+
+      {status && !heard && (
+        <div className="pointer-events-none absolute top-[14%] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white/90 px-4 py-2 text-sm font-semibold text-pine shadow-lg">
+          <span className="size-2.5 animate-pulse rounded-full bg-honey" />
+          {status}
         </div>
       )}
 

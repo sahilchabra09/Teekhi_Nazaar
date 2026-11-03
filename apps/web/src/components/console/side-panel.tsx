@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, RefreshCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { useDwell } from "./use-dwell";
@@ -17,27 +17,43 @@ export type PanelCard =
       tone: Tone;
       onSelect: () => void;
     }
-  | { kind: "preview"; key: string; text: string; speaking?: boolean };
+  | {
+      kind: "preview";
+      key: string;
+      text: string;
+      /** Small line under the text. */
+      hint?: string;
+      speaking?: boolean;
+      /** Live mic level 0–1: shows a level meter (listening state). */
+      level?: number;
+      /** Spinner-style pulse while waiting on the server. */
+      busy?: boolean;
+    };
 
 type Props = {
   heading: string;
   /** Shown when the panel is in a sub-view; dwell on it to go back. */
   back?: { label: string; onSelect: () => void };
+  /** Optional second pill, e.g. "New replies". */
+  extra?: { label: string; onSelect: () => void };
   cards: PanelCard[];
   footer?: React.ReactNode;
 };
 
-export function SidePanel({ heading, back, cards, footer }: Props) {
+export function SidePanel({ heading, back, extra, cards, footer }: Props) {
   return (
     <aside className="flex h-full min-h-0 flex-col gap-3" aria-label="Actions">
       <div className="flex min-h-10 items-center justify-between gap-2 px-1">
         <h2 className="font-display text-lg leading-tight font-bold text-pine">{heading}</h2>
-        {back && <BackPill {...back} />}
+        <div className="flex shrink-0 items-center gap-2">
+          {extra && <Pill {...extra} icon="refresh" />}
+          {back && <Pill {...back} icon="back" />}
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-5 px-1 pb-2">
         {cards.map((c) =>
-          c.kind === "preview" ? <PreviewCard key={c.key} text={c.text} speaking={c.speaking} /> : <ActionCard key={c.key} card={c} />,
+          c.kind === "preview" ? <PreviewCard key={c.key} card={c} /> : <ActionCard key={c.key} card={c} />,
         )}
       </div>
 
@@ -78,10 +94,14 @@ function ActionCard({ card }: { card: Extract<PanelCard, { kind: "action" }> }) 
   );
 }
 
-function PreviewCard({ text, speaking }: { text: string; speaking?: boolean }) {
+function PreviewCard({ card }: { card: Extract<PanelCard, { kind: "preview" }> }) {
+  const { text, hint, speaking, level, busy } = card;
   return (
     <div className="clay-well flex min-h-0 flex-1 basis-0 flex-col items-center justify-center gap-4 rounded-[2.25rem] px-5 py-4 text-center">
-      <p className="font-display text-[clamp(1.1rem,1.5vw,1.45rem)] leading-tight font-bold text-pine text-balance">“{text}”</p>
+      <p className={`font-display text-[clamp(1.1rem,1.5vw,1.45rem)] leading-tight font-bold text-pine text-balance ${busy ? "animate-pulse" : ""}`}>
+        {text}
+      </p>
+      {level !== undefined && <LevelMeter level={level} />}
       {speaking && (
         <div className="flex h-7 items-center gap-1.5" aria-label="Speaking">
           {[0, 1, 2, 3, 4].map((i) => (
@@ -93,12 +113,30 @@ function PreviewCard({ text, speaking }: { text: string; speaking?: boolean }) {
           ))}
         </div>
       )}
+      {hint && <p className="text-sm font-medium text-pine-soft">{hint}</p>}
     </div>
   );
 }
 
-function BackPill({ label, onSelect }: { label: string; onSelect: () => void }) {
+/** Seven bars that follow the mic level; the middle ones react most. */
+function LevelMeter({ level }: { level: number }) {
+  const weights = [0.35, 0.6, 0.85, 1, 0.85, 0.6, 0.35];
+  return (
+    <div className="flex h-10 items-center gap-1.5" aria-label="Microphone level">
+      {weights.map((w, i) => (
+        <span
+          key={i}
+          className="w-2 rounded-full bg-honey transition-[height] duration-100"
+          style={{ height: `${Math.max(14, Math.min(100, level * w * 160))}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Pill({ label, onSelect, icon }: { label: string; onSelect: () => void; icon: "back" | "refresh" }) {
   const { ref, props } = useDwell<HTMLButtonElement>(onSelect, { ms: 800 });
+  const Icon = icon === "back" ? ChevronLeft : RefreshCw;
   return (
     <button
       ref={ref}
@@ -106,7 +144,7 @@ function BackPill({ label, onSelect }: { label: string; onSelect: () => void }) 
       className="clay-sm clay-press relative flex shrink-0 items-center gap-1 overflow-hidden rounded-full py-2 pr-3.5 pl-2.5 text-sm font-bold text-pine"
     >
       <span className="dwell-fill !bg-honey/60" />
-      <ChevronLeft className="relative size-4" strokeWidth={2.5} />
+      <Icon className={`relative ${icon === "back" ? "size-4" : "size-3.5"}`} strokeWidth={2.5} />
       <span className="relative">{label}</span>
     </button>
   );
