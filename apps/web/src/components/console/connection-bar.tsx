@@ -17,12 +17,6 @@ export function ConnectionBar({ connection }: { connection: ReturnType<typeof us
           onClick={() => connection.camera ? connection.stopCamera() : void connection.openCamera()}>
           {connection.cameraBusy ? "Opening camera…" : connection.camera ? "Stop sharing my camera" : "Share my camera with phone"}
         </button>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs" aria-live="polite">
-          <span>Account: {connection.status}</span>
-          <span>Phone: {connection.phone ? "connected" : "offline"}</span>
-          <span>Video: {connection.media.state}</span>
-          <span>My camera: {connection.camera ? "sharing" : "off"}</span>
-        </div>
       </div>
       {connection.error && <p role="alert" className="mt-2 text-sm text-red-700">{connection.error}</p>}
       {connection.status === "unauthorized" && <p role="alert" className="mt-2 text-sm text-red-700">Your account session is unavailable. Sign in again, then disconnect and reconnect here.</p>}
