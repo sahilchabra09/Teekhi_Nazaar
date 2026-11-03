@@ -1,14 +1,19 @@
 # Mounted Android app contract
 
-**Owner:** Harnoor. **Paths:** planned Kotlin/Android project under `apps/mobile/`, planned browser media hook under `apps/web/src/lib/rtc/`, and demo materials under `pitch/`.
+**Owner:** Harnoor · **Code:** `apps/mobile/` (Android Studio project), `apps/web/src/lib/rtc/` (laptop-side video hook), `pitch/`
+**Depends on:** [interfaces.md](./interfaces.md) · **Overview:** [PLAN.md](./PLAN.md)
 
-The phone is fixed to the robot chassis and owns the local movement controller. It receives MQTT intentions from frontend/backend, uses its orientation and gyro feedback to calculate signed wheel effort, and publishes the existing ESP8266 envelope. It also connects to the backend over WebSocket for session/conversation/media events and provides the camera, microphone, and speaker for telepresence. This is an implementation contract; the repository currently contains a mobile placeholder, not a completed app.
+The phone is fixed to the robot chassis and owns the local movement controller. It receives MQTT intentions from frontend/backend, uses its orientation and gyro feedback to calculate signed wheel effort, and publishes the existing ESP8266 envelope. It also connects to the backend over WebSocket for session/conversation/media events and provides the camera, microphone, and speaker for telepresence. The Kotlin app and account-authenticated media relay are implemented; robot ownership/driving authorization and physical-device acceptance remain integration work.
 
 Use [robot operation](robot-operation.md) for calibration, correction math, timing, and password handling; [shared interfaces](interfaces.md) for application event routing; and [MQTT commands](mqtt.md) for ESP fields.
 
+**Implementation:** [Android setup and behavior](../apps/mobile/README.md) · [backend handoff](../apps/mobile/docs/backend-integration.md) · [physical-device acceptance](../apps/mobile/docs/device-acceptance.md). The phone uses the frontend's clay palette and raised cards/buttons. Its primary display shows the **frontend webcam**; until live frames arrive it shows a waiting state. Sign in on the laptop using Google/email, generate a **Link phone** code, then enter it on Android to use that exact account. Backend media rooms enforce account ownership; sign-out revokes the linked credential. Session controls live in a Controls panel. Robot controller leases and the MQTT publisher remain separate integration work.
+
+> **Android only.** A Kotlin app needs an **Android phone on the robot**. Confirm the team has one at H0.
+
 ## Setup and connection
 
-Provide settings for the backend WebSocket URL, MQTT broker address/transport, target robot, session access, and the ESP control password. Obtain scoped broker credentials and a trusted active-session grant from the backend. Store the ESP secret in platform secure credential storage, not application logs, source, or Topic 1. The backend media-upload address is a separate service setting.
+Provide settings for the shared auth/media backend URL, MQTT broker address/transport, target robot, session access, and the ESP control password. Obtain scoped broker credentials and a trusted active-session grant from the backend. Store credentials in Android Keystore-encrypted settings, not application logs, source, or Topic 1. The media-upload endpoint uses the same authenticated API as account linking and signaling.
 
 Connect to the authenticated backend WebSocket as `role=phone` for application/session events. Separately connect to MQTT Topic 1 (`teekhi-nazaar/esp12e_carbot/intent`), Topic 2 (`carbot/command`), and ESP status (`carbot/status`). Validate application inputs by type, target, session, and freshness; check the ESP device ID and age on its status messages. Ignore unknown events and the phone's own status echoes. WebSocket events never bypass the MQTT movement translator. Preserve `source:"lain-mobile"` on motor envelopes because the firmware uses that literal to select its phone timeout.
 

@@ -2,62 +2,75 @@
 
 import { Ear, LifeBuoy, LogOut, MessageSquareText, Navigation, OctagonX, Phone, ScanEye, Square, Volume2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { IrisMark } from "@/components/iris/logo";
+import { runAuthAction } from "@/lib/auth-actions";
 import { authClient } from "@/lib/auth-client";
+import { conversationReducer, initialConversation } from "@/lib/robot/conversation";
+import type { ConsoleView as View, ReplySource } from "@/lib/robot/conversation";
+import { useRobotConnection } from "@/lib/robot/use-robot-connection";
 import { TalkApiError, talkApi } from "@/lib/talk/api";
 import { UtteranceRecorder } from "@/lib/talk/recorder";
 import { speakAloud, stopSpeaking } from "@/lib/talk/speak";
 
+import { ConnectionBar } from "./connection-bar";
 import { MicPicker, readSavedMic } from "./mic-picker";
-import { type Direction, RobotFeed } from "./robot-feed";
+import { RobotFeed } from "./robot-feed";
 import { type PanelCard, SidePanel } from "./side-panel";
-
-type Replies = { heard: string; replies: string[]; lowConfidence: boolean };
-
-type View =
-  | { name: "home" }
-  | { name: "phrases" }
-  | { name: "help" }
-  | { name: "listening"; speaking: boolean }
-  | { name: "thinking"; heard?: string }
-  | { name: "no-speech" }
-  | ({ name: "suggestions" } & Replies)
-  | { name: "confirm"; text: string; from: View; fromTalk: boolean }
-  | { name: "speaking"; text: string };
 
 const QUICK_PHRASES = ["Please come here.", "I need some help.", "Could you repeat that?"];
 const TONES = ["teal", "honey", "sky"] as const;
 
 export default function Console({ userName }: { userName: string }) {
   const router = useRouter();
-  const [view, setView] = useState<View>({ name: "home" });
-  const [driveEnabled, setDriveEnabled] = useState(true);
-  const [moving, setMoving] = useState<Direction | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const connection = useRobotConnection();
+  const [conversation, dispatch] = useReducer(conversationReducer, initialConversation);
+  const { view } = conversation;
+  const [signingOut, setSigningOut] = useState(false);
+
+  // "Say something" (laptop mic → /api/talk → AutoSage, docs/talk.md + docs/care.md)
   const [micId, setMicId] = useState("");
   const [micLevel, setMicLevel] = useState(0);
   const [micListVersion, setMicListVersion] = useState(0);
-
-  const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recorder = useRef<UtteranceRecorder | null>(null);
   const request = useRef<AbortController | null>(null);
-  /** Current conversation (one AutoSage chat). Cleared when the patient leaves conversation mode. */
+  /** Current conversation (= one AutoSage chat). Cleared when the patient leaves conversation mode. */
   const conversationId = useRef<string | null>(null);
+  /** After the phone confirms it spoke a talk reply, listen again for the answer. */
+  const resumeListening = useRef(false);
+
+  const setView = useCallback((next: View) => dispatch({ type: "navigate", view: next }), []);
+  const confirm = (text: string, from: View, source: ReplySource = "phrase") => setView({ name: "confirm", text, source, from });
 
   useEffect(() => setMicId(readSavedMic()), []);
 
-  // ── robot movement: short bounded bursts, re-sent while the gaze stays (interfaces.md §3)
-  const move = useCallback((d: Direction) => {
-    setMoving(d);
-    if (stopTimer.current) clearTimeout(stopTimer.current);
-    stopTimer.current = setTimeout(() => setMoving(null), 300);
-    // TODO(hub): hub.send({ type: "move", direction: d, duration_ms: 300, seq })
-  }, []);
+  // ── events from the robot phone over the hub (docs/interfaces.md §3)
+  useEffect(() => {
+    if (!connection.hub) return;
+    const unsubscribes = ["speech_activity", "transcript", "suggestions", "tts_status"].map((type) =>
+      connection.hub!.on(type, (message) => dispatch({ type: "event", message })),
+    );
+    unsubscribes.push(connection.hub.on("error", (message) => toast.error(typeof message.message === "string" ? message.message : "The hub reported an error.")));
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [connection.hub]);
+  useEffect(() => {
+    if (!connection.phone || connection.status !== "connected") dispatch({ type: "disconnected" });
+  }, [connection.phone, connection.status]);
+  useEffect(() => {
+    if (conversation.error) {
+      toast.error(conversation.error);
+      dispatch({ type: "clear_error" });
+    }
+  }, [conversation.error]);
+  useEffect(() => {
+    if (view.name !== "speaking") return;
+    const timer = setTimeout(() => dispatch({ type: "timeout", speakId: view.speakId }), 95_000);
+    return () => clearTimeout(timer);
+  }, [view]);
 
-  // ───────────────────────────── Say something (docs/talk.md) ─────────────────────────────
+  // ───────────────────────────── Say something ─────────────────────────────
 
   const abortWork = useCallback(() => {
     recorder.current?.cancel();
@@ -67,20 +80,31 @@ export default function Console({ userName }: { userName: string }) {
     setMicLevel(0);
   }, []);
 
-  const showError = useCallback((error: unknown) => {
-    if (error instanceof DOMException && error.name === "AbortError") return; // user cancelled
-    if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
-      toast.error("Microphone access is blocked. Allow it in the browser’s address bar.");
-    } else if (error instanceof DOMException && (error.name === "NotFoundError" || error.name === "OverconstrainedError")) {
-      toast.error("That microphone isn’t available. Pick another one below the cards.");
-    } else if (error instanceof TalkApiError) {
-      toast.error(error.message);
-    } else {
-      toast.error("Something went wrong while listening. Try again.");
-      console.error(error);
-    }
-    setView({ name: "home" });
+  /** Leaving conversation mode ends the conversation; the next "Say something" opens a new chat. */
+  const endConversation = useCallback(() => {
+    const id = conversationId.current;
+    conversationId.current = null;
+    resumeListening.current = false;
+    if (id) void talkApi.endConversation(id).catch(() => {});
   }, []);
+
+  const showError = useCallback(
+    (error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return; // user cancelled
+      if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+        toast.error("Microphone access is blocked. Allow it in the browser’s address bar.");
+      } else if (error instanceof DOMException && (error.name === "NotFoundError" || error.name === "OverconstrainedError")) {
+        toast.error("That microphone isn’t available. Pick another one below the cards.");
+      } else if (error instanceof TalkApiError) {
+        toast.error(error.message);
+      } else {
+        toast.error("Something went wrong while listening. Try again.");
+        console.error(error);
+      }
+      setView({ name: "home" });
+    },
+    [setView],
+  );
 
   /** Listen for one thing someone says, then get reply suggestions for it. */
   const startListening = useCallback(async () => {
@@ -115,15 +139,18 @@ export default function Console({ userName }: { userName: string }) {
       conversationId.current = result.conversationId;
 
       if (result.status === "no_speech") return setView({ name: "no-speech" });
-      console.info(
-        `[talk] heard in ${result.timings.sttMs} ms, replies (${result.source}) in ${result.timings.repliesMs} ms`,
-        result.models,
-      );
-      setView({ name: "suggestions", heard: result.heard, replies: result.replies, lowConfidence: result.lowConfidence });
+      console.info(`[talk] heard in ${result.timings.sttMs} ms, replies (${result.source}) in ${result.timings.repliesMs} ms`, result.models);
+      setView({
+        name: "suggestions",
+        utteranceId: result.conversationId,
+        heard: result.heard,
+        replies: result.replies,
+        lowConfidence: result.lowConfidence,
+      });
     } catch (error) {
       showError(error);
     }
-  }, [abortWork, micId, showError]);
+  }, [abortWork, micId, setView, showError]);
 
   const moreReplies = useCallback(
     async (heard: string) => {
@@ -135,54 +162,53 @@ export default function Console({ userName }: { userName: string }) {
       try {
         const result = await talkApi.moreReplies(conversationId.current, controller.signal);
         request.current = null;
-        setView({ name: "suggestions", heard: result.heard, replies: result.replies, lowConfidence: result.lowConfidence });
+        setView({ name: "suggestions", utteranceId: result.conversationId, heard: result.heard, replies: result.replies, lowConfidence: result.lowConfidence });
       } catch (error) {
         showError(error);
       }
     },
-    [abortWork, showError],
+    [abortWork, setView, showError],
   );
 
-  const speak = useCallback(
-    async (text: string, fromTalk: boolean) => {
-      setView({ name: "speaking", text });
-      // TODO(robot phone): hub.send({ type: "speak", speak_id, text, source }) instead of speaking here.
-      await speakAloud(text);
-      // Part of the conversation's chat, so the next replies know what was said.
-      if (fromTalk && conversationId.current) void talkApi.spoken(conversationId.current, text).catch(() => {});
-      // In a conversation, the other person usually answers back: keep listening.
-      if (fromTalk) void startListening();
-      else setView({ name: "home" });
-    },
-    [startListening],
-  );
+  /**
+   * Speak a confirmed reply: through the robot phone when it's connected (it reports tts_status),
+   * otherwise on this laptop. Talk replies join the conversation's AutoSage chat, and IRIS listens again.
+   */
+  async function speak(text: string, source: ReplySource) {
+    const fromTalk = source === "suggestion" && conversationId.current !== null;
+    if (fromTalk) void talkApi.spoken(conversationId.current!, text).catch(() => {});
+    const speakId = `s_${crypto.randomUUID()}`;
+
+    if (connection.hub && connection.phone && connection.status === "connected") {
+      try {
+        connection.hub.send({ type: "speak", speak_id: speakId, text, source, ts: Date.now() });
+        resumeListening.current = fromTalk;
+        setView({ name: "speaking", text, speakId });
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "Could not send speech");
+      }
+      return;
+    }
+
+    setView({ name: "speaking", text, speakId });
+    await speakAloud(text);
+    if (fromTalk) void startListening();
+    else setView({ name: "home" });
+  }
+
+  // When the phone confirms it finished a talk reply, keep the conversation going.
+  const previousView = useRef(view.name);
+  useEffect(() => {
+    const wasSpeaking = previousView.current === "speaking";
+    previousView.current = view.name;
+    if (wasSpeaking && view.name === "home" && resumeListening.current) {
+      resumeListening.current = false;
+      void startListening();
+    }
+  }, [view.name, startListening]);
 
   useEffect(() => () => abortWork(), [abortWork]);
   useEffect(() => () => stopSpeaking(), []);
-  useEffect(() => () => stream?.getTracks().forEach((t) => t.stop()), [stream]);
-
-  async function previewWebcam() {
-    try {
-      setStream(await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false }));
-    } catch {
-      toast.error("Camera access was blocked. Allow it in the browser’s address bar and try again.");
-    }
-  }
-
-  async function signOut() {
-    abortWork();
-    await authClient.signOut();
-    router.push("/login");
-    router.refresh();
-  }
-
-  /** Leaving conversation mode ends the conversation; the next "Say something" opens a new chat. */
-  const endConversation = useCallback(() => {
-    const id = conversationId.current;
-    conversationId.current = null;
-    if (id) void talkApi.endConversation(id).catch(() => {});
-  }, []);
-
   useEffect(() => () => endConversation(), [endConversation]);
 
   const goHome = () => {
@@ -191,10 +217,26 @@ export default function Console({ userName }: { userName: string }) {
     endConversation();
     setView({ name: "home" });
   };
-  const confirm = (text: string, from: View, fromTalk: boolean) => setView({ name: "confirm", text, from, fromTalk });
+
+  async function signOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    abortWork();
+    endConversation();
+    connection.disconnect();
+    await runAuthAction(() => authClient.signOut(), {
+      onSuccess: () => {
+        router.push("/login");
+        router.refresh();
+      },
+      onError: (message) => toast.error(message),
+      onSettled: () => setSigningOut(false),
+    });
+  }
 
   // ───────────────────────────── panel content per view ─────────────────────────────
 
+  const home: View = { name: "home" };
   let heading = "What would you like to do?";
   let back: { label: string; onSelect: () => void } | undefined;
   let extra: { label: string; onSelect: () => void } | undefined;
@@ -207,11 +249,11 @@ export default function Console({ userName }: { userName: string }) {
         {
           kind: "action",
           key: "drive",
-          title: driveEnabled ? "Driving is on" : "Driving is off",
-          hint: driveEnabled ? "Look here to pause driving" : "Look here to drive again",
+          title: "Driving unavailable",
+          hint: "MQTT control session required",
           icon: Navigation,
-          tone: driveEnabled ? "teal" : "plain",
-          onSelect: () => setDriveEnabled((d) => !d),
+          tone: "plain",
+          onSelect: () => toast("The MQTT controller/session publisher is not connected. Motor control stays off."),
         },
         {
           kind: "action",
@@ -259,45 +301,29 @@ export default function Console({ userName }: { userName: string }) {
       ];
       break;
 
-    case "suggestions":
-      heading = view.lowConfidence ? "Not sure I heard right" : "Pick a reply";
-      back = { label: "Ignore", onSelect: goHome };
-      extra = { label: "New replies", onSelect: () => void moreReplies(view.heard) };
-      cards = view.replies.map((r, i) => ({
-        kind: "action",
-        key: r,
-        title: r,
-        tone: TONES[i % TONES.length]!,
-        onSelect: () => confirm(r, view, true),
-      }));
-      break;
-
     case "phrases":
       heading = "Quick phrases";
-      back = { label: "Back", onSelect: goHome };
+      back = { label: "Back", onSelect: () => setView(home) };
       cards = QUICK_PHRASES.map((p, i) => ({
         kind: "action",
         key: p,
         title: p,
         tone: TONES[i]!,
-        onSelect: () => confirm(p, view, false),
+        onSelect: () => confirm(p, view),
       }));
       break;
 
     case "help":
       heading = "Help";
-      back = { label: "Back", onSelect: goHome };
+      back = { label: "Back", onSelect: () => setView(home) };
       cards = [
         {
           kind: "action",
           key: "caregiver",
-          title: "Call my caregiver",
+          title: "Ask for help",
           icon: Phone,
           tone: "honey",
-          onSelect: () => {
-            toast.success("Caregiver alert sent");
-            setView({ name: "home" });
-          },
+          onSelect: () => confirm("Please come here. I need assistance.", view, "system"),
         },
         {
           kind: "action",
@@ -313,21 +339,41 @@ export default function Console({ userName }: { userName: string }) {
           title: "Stop the robot",
           icon: OctagonX,
           tone: "tomato",
-          onSelect: () => {
-            setMoving(null);
-            setDriveEnabled(false);
-            toast.success("Robot stopped. Driving is off.");
-            setView({ name: "home" });
-          },
+          onSelect: () => toast("Use STOP on the mounted phone. This console has no authorized MQTT drive connection yet."),
         },
       ];
       break;
+
+    case "suggestions": {
+      const fromTalk = conversationId.current !== null && view.utteranceId === conversationId.current;
+      if (view.lowConfidence && !fromTalk) {
+        heading = "Could you repeat that?";
+        cards = [
+          { kind: "action", key: "repeat", title: "Ask them to repeat", tone: "honey", onSelect: () => confirm("Sorry, could you repeat that?", view, "system") },
+          { kind: "action", key: "ignore", title: "Ignore", tone: "plain", onSelect: () => setView(home) },
+          { kind: "action", key: "phrases", title: "Use a quick phrase", tone: "sky", onSelect: () => setView({ name: "phrases" }) },
+        ];
+        break;
+      }
+      // Talk replies are always usable: when unsure, AutoSage already phrases them as "could you repeat that?".
+      heading = view.lowConfidence ? "Not sure I heard right" : "Pick a reply";
+      back = { label: "Ignore", onSelect: goHome };
+      if (fromTalk) extra = { label: "New replies", onSelect: () => void moreReplies(view.heard) };
+      cards = view.replies.map((r, i) => ({
+        kind: "action",
+        key: r,
+        title: r,
+        tone: TONES[i % TONES.length]!,
+        onSelect: () => confirm(r, view, "suggestion"),
+      }));
+      break;
+    }
 
     case "confirm":
       heading = "Say this out loud?";
       cards = [
         { kind: "preview", key: "preview", text: `“${view.text}”` },
-        { kind: "action", key: "speak", title: "Speak it", icon: Volume2, tone: "honey", onSelect: () => void speak(view.text, view.fromTalk) },
+        { kind: "action", key: "speak", title: "Speak it", icon: Volume2, tone: "honey", onSelect: () => void speak(view.text, view.source) },
         { kind: "action", key: "cancel", title: "Cancel", icon: X, tone: "plain", onSelect: () => setView(view.from) },
       ];
       break;
@@ -338,50 +384,64 @@ export default function Console({ userName }: { userName: string }) {
       break;
   }
 
-  const heard = view.name === "suggestions" ? view.heard : view.name === "thinking" && view.heard ? view.heard : null;
+  const heard =
+    view.name === "suggestions"
+      ? view.heard
+      : view.name === "thinking"
+        ? (view.heard ?? null)
+        : view.name === "listening" || view.name === "no-speech"
+          ? null
+          : conversation.heard;
 
   return (
-    <main className="grid h-svh grid-cols-1 gap-3 bg-mist p-3 md:grid-cols-[minmax(0,4fr)_minmax(14rem,1fr)]">
-      {/* left: camera fills the whole height */}
-      <div className="min-h-[55vh] md:min-h-0">
-        <RobotFeed
-          stream={stream}
-          mirrored
-          driveEnabled={driveEnabled && view.name !== "speaking"}
-          moving={moving}
-          heard={heard}
-          heardLabel={view.name === "suggestions" && view.lowConfidence ? "I think they said" : "Someone nearby said"}
-          status={feedStatus}
-          onMove={move}
-          onPreviewWebcam={previewWebcam}
+    <main className="flex h-svh flex-col gap-3 overflow-y-auto bg-mist p-3">
+      <ConnectionBar connection={connection} />
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[minmax(0,4fr)_minmax(14rem,1fr)]">
+        {/* left: camera fills the whole height */}
+        <div className="min-h-[55vh] md:min-h-0">
+          <RobotFeed
+            stream={connection.media.remote}
+            localCamera={connection.camera}
+            fallbackFrameUrl={connection.media.fallbackFrameUrl}
+            mediaState={connection.media.state}
+            driveEnabled={false}
+            moving={null}
+            heard={heard}
+            heardLabel={view.name === "suggestions" && view.lowConfidence ? "I think they said" : "Someone nearby said"}
+            status={feedStatus}
+            listening={conversation.activeSpeech || (view.name === "listening" && view.speaking)}
+            onMove={() => {}}
+            onPreviewWebcam={() => void connection.openCamera()}
+          />
+        </div>
+
+        {/* right: three cards */}
+        <SidePanel
+          heading={heading}
+          back={back}
+          extra={extra}
+          cards={cards}
+          footer={
+            <div className="flex flex-col gap-1 px-1 pt-1">
+              {/* which mic "Say something" listens with (the robot phone's mic once its STT is wired) */}
+              <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />
+              <div className="flex items-center gap-2">
+                <IrisMark size={26} />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-pine-soft">{userName}</span>
+                <button
+                  onClick={signOut}
+                  disabled={signingOut}
+                  aria-label="Sign out"
+                  title="Sign out"
+                  className="grid size-8 place-items-center rounded-full text-pine-soft transition-colors hover:bg-white hover:text-pine"
+                >
+                  <LogOut className="size-4" />
+                </button>
+              </div>
+            </div>
+          }
         />
       </div>
-
-      {/* right: three cards */}
-      <SidePanel
-        heading={heading}
-        back={back}
-        extra={extra}
-        cards={cards}
-        footer={
-          <div className="flex flex-col gap-1 px-1 pt-1">
-            {/* testing aid: which mic "Say something" listens with (the robot phone's mic later) */}
-            <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />
-            <div className="flex items-center gap-2">
-              <IrisMark size={26} />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-pine-soft">{userName}</span>
-              <button
-                onClick={signOut}
-                aria-label="Sign out"
-                title="Sign out"
-                className="grid size-8 place-items-center rounded-full text-pine-soft transition-colors hover:bg-white hover:text-pine"
-              >
-                <LogOut className="size-4" />
-              </button>
-            </div>
-          </div>
-        }
-      />
     </main>
   );
 }

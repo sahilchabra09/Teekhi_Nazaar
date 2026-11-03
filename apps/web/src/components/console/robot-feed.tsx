@@ -1,9 +1,10 @@
 "use client";
 
 import { Video } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { IrisMark } from "@/components/iris/logo";
+import type { RobotStream } from "@/lib/rtc";
 
 import { useDwell } from "./use-dwell";
 
@@ -11,6 +12,10 @@ export type Direction = "forward" | "backward" | "left" | "right";
 
 type Props = {
   stream: MediaStream | null;
+  localCamera?: MediaStream;
+  fallbackFrameUrl?: string | null;
+  mediaState?: RobotStream["state"];
+  listening?: boolean;
   mirrored?: boolean;
   driveEnabled: boolean;
   moving: Direction | null;
@@ -23,29 +28,69 @@ type Props = {
   onPreviewWebcam: () => void;
 };
 
-export function RobotFeed({ stream, mirrored, driveEnabled, moving, heard, heardLabel = "Someone nearby said", status, onMove, onPreviewWebcam }: Props) {
+export function RobotFeed({
+  stream,
+  localCamera,
+  fallbackFrameUrl,
+  mediaState = "idle",
+  listening,
+  mirrored,
+  driveEnabled,
+  moving,
+  heard,
+  heardLabel = "Someone nearby said",
+  status,
+  onMove,
+  onPreviewWebcam,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const localRef = useRef<HTMLVideoElement>(null);
+  const [muted, setMuted] = useState(true);
+  const [playbackError, setPlaybackError] = useState(false);
 
   useEffect(() => {
-    if (videoRef.current) videoRef.current.srcObject = stream;
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      if (stream) void videoRef.current.play().catch(() => setPlaybackError(true));
+    }
   }, [stream]);
+  useEffect(() => {
+    if (localRef.current) {
+      localRef.current.srcObject = localCamera ?? null;
+      if (localCamera) void localRef.current.play().catch(() => {});
+    }
+  }, [localCamera]);
 
   return (
     <div className="relative h-full overflow-hidden rounded-[1.5rem] bg-pine shadow-[0_10px_30px_-12px_rgb(18_56_50/0.45)]">
-      {stream ? (
         <video
           ref={videoRef}
           autoPlay
           playsInline
-          muted
-          className="size-full object-cover"
+          muted={muted}
+          aria-label="Live robot camera"
+          className={stream && !fallbackFrameUrl ? "size-full object-cover" : "hidden"}
           style={mirrored ? { transform: "scaleX(-1)" } : undefined}
         />
-      ) : (
-        <EmptyFeed onPreviewWebcam={onPreviewWebcam} />
-      )}
+      {fallbackFrameUrl && <img src={fallbackFrameUrl} alt="Live robot camera, JPEG fallback" className="size-full object-cover" />}
+      {!stream && !fallbackFrameUrl && <EmptyFeed onPreviewWebcam={onPreviewWebcam} mediaState={mediaState} />}
 
       <GuideLines />
+      <div className="absolute top-3 left-3 flex items-center gap-2 rounded-full bg-pine/85 px-3 py-1.5 text-xs font-semibold text-white">
+        <span>{listening ? "Someone is speaking…" : `Robot video · ${mediaState}`}</span>
+        {stream && <button type="button" className="rounded-full bg-white/15 px-2 py-1" onClick={() => {
+          const nextMuted = playbackError ? false : !muted;
+          setMuted(nextMuted);
+          if (videoRef.current) {
+            videoRef.current.muted = nextMuted;
+            void videoRef.current.play().then(() => setPlaybackError(false), () => setPlaybackError(true));
+          }
+        }}>{playbackError ? "Play audio" : muted ? "Enable audio" : "Mute audio"}</button>}
+      </div>
+      <div className={localCamera ? "absolute right-4 bottom-4 w-36 overflow-hidden rounded-xl bg-pine shadow-lg ring-1 ring-white/25 sm:w-48" : "hidden"}>
+        <video ref={localRef} autoPlay playsInline muted aria-label="Your camera shared with the phone" className="aspect-video w-full object-cover" />
+        <p className="px-2 py-1 text-center text-xs font-semibold text-white">Your camera → phone</p>
+      </div>
 
       {/* Invisible gaze drive zones along the edges. Only a soft glow shows while one is active.
           The centre of the feed is a safe zone that never moves the robot. */}
@@ -152,21 +197,21 @@ function EdgeZone({ dir, onMove, active }: { dir: Direction; onMove: (d: Directi
   );
 }
 
-function EmptyFeed({ onPreviewWebcam }: { onPreviewWebcam: () => void }) {
+function EmptyFeed({ onPreviewWebcam, mediaState }: { onPreviewWebcam: () => void; mediaState: RobotStream["state"] }) {
   return (
-    <div className="grid size-full place-items-center">
+    <div className="absolute inset-0 grid size-full place-items-center">
       <div className="flex max-w-sm flex-col items-center px-6 text-center">
         <IrisMark size={72} />
-        <h2 className="mt-5 font-display text-2xl font-bold text-white">Waiting for the robot’s camera</h2>
+        <h2 className="mt-5 font-display text-2xl font-bold text-white">{mediaState === "failed" ? "Robot video unavailable" : "Waiting for the robot’s camera"}</h2>
         <p className="mt-2 text-[15px] leading-relaxed text-white/60">
-          Open the IRIS app on the robot’s phone. The live view appears here as soon as it connects.
+                Link the phone to your account above, start IRIS on the phone, then click Connect phone. Its camera appears here; your laptop camera is shared to the phone.
         </p>
         <button
           onClick={onPreviewWebcam}
           className="mt-6 flex items-center gap-2 rounded-full bg-white/10 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-white/15 transition-colors hover:bg-white/15"
         >
           <Video className="size-4" />
-          Preview with this laptop’s camera
+          Share this laptop’s camera with the phone
         </button>
       </div>
     </div>

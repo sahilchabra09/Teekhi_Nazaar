@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import z from "zod";
 
 import { authClient } from "@/lib/auth-client";
+import { runAuthAction } from "@/lib/auth-actions";
 
 type Mode = "sign-in" | "sign-up";
 
@@ -24,6 +25,9 @@ export default function AuthPanel() {
   const [values, setValues] = useState({ name: "", email: "", password: "" });
   const [errors, setErrors] = useState<Partial<Record<keyof typeof values, string>>>({});
   const [busy, setBusy] = useState<"email" | "google" | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
+
+  const reportError = (message: string) => { setRequestError(message); toast.error(message); };
 
   const set = (key: keyof typeof values) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setValues((v) => ({ ...v, [key]: e.target.value }));
@@ -32,6 +36,8 @@ export default function AuthPanel() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
+    setRequestError(null);
     const parsed = (mode === "sign-up" ? signUpSchema : signInSchema).safeParse(values);
     if (!parsed.success) {
       const next: typeof errors = {};
@@ -41,43 +47,29 @@ export default function AuthPanel() {
     }
 
     setBusy("email");
-    const handlers = {
+    await runAuthAction(() => mode === "sign-up"
+      ? authClient.signUp.email({ name: values.name.trim(), email: values.email, password: values.password })
+      : authClient.signIn.email({ email: values.email, password: values.password }), {
       onSuccess: () => {
         toast.success(mode === "sign-up" ? "Account created" : "Signed in");
         router.push("/");
         router.refresh();
       },
-      onError: (ctx: { error: { message?: string; statusText?: string } }) => {
-        toast.error(ctx.error.message || ctx.error.statusText || "Couldn't reach the server. Is it running?");
-      },
-    };
-    if (mode === "sign-up") {
-      await authClient.signUp.email(
-        { name: values.name.trim(), email: values.email, password: values.password },
-        handlers,
-      );
-    } else {
-      await authClient.signIn.email({ email: values.email, password: values.password }, handlers);
-    }
-    setBusy(null);
+      onError: reportError,
+      onSettled: () => setBusy(null),
+    });
   }
 
   async function google() {
+    if (busy) return;
+    setRequestError(null);
     setBusy("google");
     const origin = window.location.origin;
-    const { error } = await authClient.signIn.social({
+    await runAuthAction(() => authClient.signIn.social({
       provider: "google",
       callbackURL: `${origin}/`,
       errorCallbackURL: `${origin}/login`,
-    });
-    if (error) {
-      toast.error(
-        error.status === 404 || /provider/i.test(error.message ?? "")
-          ? "Google sign-in isn't set up yet. Add the keys from docs/google.md."
-          : error.message || "Google sign-in failed",
-      );
-      setBusy(null);
-    }
+    }), { provider: "google", onError: reportError, onSettled: () => setBusy(null) });
   }
 
   return (
@@ -89,15 +81,18 @@ export default function AuthPanel() {
         {mode === "sign-in" ? "New to IRIS? " : "Already have an account? "}
         <button
           type="button"
+          disabled={busy !== null}
           onClick={() => {
             setMode(mode === "sign-in" ? "sign-up" : "sign-in");
             setErrors({});
+            setRequestError(null);
           }}
           className="font-semibold text-teal underline-offset-4 hover:underline"
         >
           {mode === "sign-in" ? "Create an account" : "Sign in"}
         </button>
       </p>
+      {requestError && <p role="alert" className="mt-4 rounded-xl bg-tomato/10 px-3 py-2 text-sm text-tomato">{requestError}</p>}
 
       <button
         type="button"
@@ -118,12 +113,13 @@ export default function AuthPanel() {
       <form onSubmit={submit} noValidate className="space-y-3.5">
         {mode === "sign-up" && (
           <Field label="Name" error={errors.name}>
-            <input autoComplete="name" value={values.name} onChange={set("name")} className={inputClass(errors.name)} />
+            <input autoComplete="name" disabled={busy !== null} value={values.name} onChange={set("name")} className={inputClass(errors.name)} />
           </Field>
         )}
         <Field label="Email" error={errors.email}>
           <input
             type="email"
+            disabled={busy !== null}
             autoComplete="email"
             value={values.email}
             onChange={set("email")}
@@ -133,6 +129,7 @@ export default function AuthPanel() {
         <Field label="Password" error={errors.password}>
           <input
             type="password"
+            disabled={busy !== null}
             autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
             value={values.password}
             onChange={set("password")}
