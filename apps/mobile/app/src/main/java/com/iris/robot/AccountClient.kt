@@ -2,6 +2,7 @@ package com.iris.robot
 
 import com.iris.robot.core.HubAddress
 import com.iris.robot.core.Protocol
+import com.iris.robot.core.OAuthAttempt
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import okhttp3.*
@@ -13,12 +14,13 @@ import java.util.concurrent.TimeUnit
 @Serializable data class LinkedUser(val id: String, val email: String, val name: String)
 @Serializable data class LinkedAccount(val token: String, val expires_at_ms: Long, val user: LinkedUser)
 @Serializable data class AccountInfo(val expires_at_ms: Long, val user: LinkedUser)
-@Serializable private data class LinkRequest(val code: String)
-class AccountExpired : IllegalStateException("Your account link expired. Sign in again using a new code from your laptop.")
+@Serializable private data class OAuthStartRequest(val state: String, val code_challenge: String)
+@Serializable data class OAuthStart(val authorization_url: String, val expires_at_ms: Long)
+@Serializable private data class OAuthExchange(val code: String, val code_verifier: String)
+class AccountExpired : IllegalStateException("Your session expired. Continue with Google to sign in again.")
 
-/** Native authorization uses a one-use code issued by the frontend's Better Auth session.
- * Both email/password and Google accounts use precisely the same account, without a
- * second password database or a Google client secret in the APK. */
+/** Google OAuth uses the external browser and existing Better Auth Google provider.
+ * The browser return is exchanged using the verifier kept in Keystore-encrypted settings. */
 class AccountClient(private val settings: RobotSettings) : AutoCloseable {
     private val address = HubAddress.parse(settings.hub)
     private val client = OkHttpClient.Builder().callTimeout(12, TimeUnit.SECONDS)
@@ -34,7 +36,8 @@ class AccountClient(private val settings: RobotSettings) : AutoCloseable {
         return client.newCall(builder.build()).execute().use { response ->
             if (response.code == 401) throw AccountExpired()
             require(response.isSuccessful) {
-                if (response.code == 429) "Too many link attempts. Wait one minute and try again."
+                if (response.code == 429) "Too many sign-in attempts. Wait one minute and try again."
+                else if (response.code == 503) "Google sign-in is not configured or the account server is unavailable."
                 else "Account server unavailable (HTTP ${response.code}). Check the laptop address."
             }
             val source = response.body?.source() ?: error("Empty account response")
@@ -43,13 +46,17 @@ class AccountClient(private val settings: RobotSettings) : AutoCloseable {
             source.readUtf8()
         }
     }
-    fun link(code: String): LinkedAccount {
-        val normalized = code.filterNot { it.isWhitespace() || it == '-' }.uppercase()
-        require(normalized.matches(Regex("[A-F0-9]{12}"))) { "Enter the 12-character code shown on your laptop." }
-        return try {
-            Protocol.json.decodeFromString<LinkedAccount>(request("/api/mobile/link", Protocol.json.encodeToString(LinkRequest(normalized)), false))
-        } catch (_: AccountExpired) { throw IllegalStateException("That code is invalid or expired. Click Link phone on your laptop to create another.") }
+    fun begin(attempt: OAuthAttempt): OAuthStart {
+        val result = Protocol.json.decodeFromString<OAuthStart>(request("/api/mobile/oauth/start",
+            Protocol.json.encodeToString(OAuthStartRequest(attempt.state, attempt.challenge)), false))
+        val url = result.authorization_url.toHttpUrl()
+        require(url.encodedPath == "/api/mobile/oauth/authorize" && url.username.isEmpty() && url.password.isEmpty()) { "Invalid Google sign-in URL" }
+        requireBackendTransport(HubAddress.parse(url.newBuilder().encodedPath("/").query(null).fragment(null).build().toString()), settings.allowLocalSessionHttp)
+        require(result.expires_at_ms > System.currentTimeMillis()) { "Google sign-in expired. Please try again." }
+        return result
     }
+    fun complete(code: String, attempt: OAuthAttempt): LinkedAccount = Protocol.json.decodeFromString(request("/api/mobile/oauth/exchange",
+        Protocol.json.encodeToString(OAuthExchange(code, attempt.verifier)), false))
     fun me(): AccountInfo = Protocol.json.decodeFromString(request("/api/mobile/me"))
     fun logout() { request("/api/mobile/logout", "{}") }
     override fun close() { client.dispatcher.cancelAll(); client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll() }

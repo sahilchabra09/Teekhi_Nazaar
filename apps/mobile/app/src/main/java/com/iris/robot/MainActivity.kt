@@ -1,7 +1,9 @@
 package com.iris.robot
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -44,11 +46,19 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent.action == Intent.ACTION_VIEW) intent.data?.let { model.googleCallback(it.toString()) }
         enableEdgeToEdge(statusBarStyle = SystemBarStyle.light(0xFFDCEBE4.toInt(), 0xFFDCEBE4.toInt()),
             navigationBarStyle = SystemBarStyle.light(0xFFDCEBE4.toInt(), 0xFFDCEBE4.toInt()))
         setContent {
             IrisTheme {
                 val state by model.state.collectAsStateWithLifecycle()
+                LaunchedEffect(state.authorizationUrl) {
+                    state.authorizationUrl?.let { url ->
+                        model.browserOpened()
+                        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)) }
+                        catch (_: Exception) { model.cancelGoogle(); model.report("Install a web browser to continue with Google.") }
+                    }
+                }
                 LaunchedEffect(state.running) {
                     if (state.running) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -70,12 +80,17 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         ClayCard(Modifier.fillMaxWidth()) {
-                            Setup(model.initialSettings, state.authBusy, model::link, model::signOut, ::start)
+                            Setup(model.initialSettings, state.authBusy, state.awaitingGoogle, model::google, model::cancelGoogle, model::signOut, ::start)
                         }
                     }
                 }
             }
         }
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == Intent.ACTION_VIEW) intent.data?.let { model.googleCallback(it.toString()) }
     }
     private fun granted() = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
     private fun start(settings: RobotSettings) {
@@ -85,13 +100,12 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { model.background(); super.onPause() }
 }
 
-@Composable private fun Setup(initial: RobotSettings, busy: Boolean,
-    link: (String, String, Boolean) -> Unit, signOut: () -> Unit, start: (RobotSettings) -> Unit) {
+@Composable private fun Setup(initial: RobotSettings, busy: Boolean, awaitingGoogle: Boolean,
+    google: (String, Boolean) -> Unit, cancelGoogle: () -> Unit, signOut: () -> Unit, start: (RobotSettings) -> Unit) {
     var hub by remember(initial) { mutableStateOf(initial.hub) }
     var robot by remember(initial) { mutableStateOf(initial.robotEnabled) }
     var broker by remember(initial) { mutableStateOf(initial.broker) }
     var esp by remember(initial) { mutableStateOf(initial.espPassword) }
-    var code by remember { mutableStateOf("") }
     var username by remember(initial) { mutableStateOf(initial.brokerUser) }
     var password by remember(initial) { mutableStateOf(initial.brokerPassword) }
     var http by remember(initial) { mutableStateOf(initial.allowLocalSessionHttp) }
@@ -102,13 +116,15 @@ class MainActivity : ComponentActivity() {
         singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
     if (!paired) {
         Text("Sign in with your IRIS account", fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        Text("Use Google or email to sign in on the laptop. Click Link phone in the console, then enter its code here. Both devices will use that same account.", color = Clay.Soft)
-        OutlinedTextField(code, { code = it.take(20) }, label = { Text("One-time sign-in code") },
-            placeholder = { Text("ABCD 1234 E567") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+        Text("Continue with Google using the same email as your laptop. IRIS connects both devices automatically.", color = Clay.Soft)
         Toggle("Allow HTTP on my private laptop hotspot", http, !busy) { http = it }
-        if (http) Text("Local testing only. Your sign-in code and session travel without encryption. Use HTTPS on a shared network.", fontSize = 13.sp, color = Clay.Soft)
-        ClayButton(onClick = { link(hub, code, http); code = "" }, enabled = !busy && hub.isNotBlank() && code.filterNot { it.isWhitespace() || it == '-' }.length == 12,
-            modifier = Modifier.fillMaxWidth().height(64.dp)) { Text(if (busy) "Signing in…" else "Link my account", fontSize = 21.sp) }
+        if (http) Text("Local testing only. Use HTTPS on a shared network.", fontSize = 13.sp, color = Clay.Soft)
+        ClayButton(onClick = { google(hub, http) }, enabled = !busy && hub.isNotBlank(), tone = Clay.Surface,
+            modifier = Modifier.fillMaxWidth().height(64.dp)) { Text(if (busy) "Signing in…" else "G   Continue with Google", fontSize = 21.sp) }
+        if (awaitingGoogle) {
+            Text("Finish signing in with Google in your browser, then return to IRIS.", color = Clay.Soft)
+            TextButton(onClick = cancelGoogle, enabled = !busy) { Text("Cancel sign-in") }
+        }
         return
     }
     Text("Signed in as", color = Clay.Soft, fontSize = 13.sp)

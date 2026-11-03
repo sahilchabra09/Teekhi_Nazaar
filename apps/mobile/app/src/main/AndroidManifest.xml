@@ -16,11 +16,17 @@
         android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="true" android:supportsRtl="true">
         <!-- Fixed robot mount: preserve camera and calibration orientation (mobile.md M1). -->
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait"
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait" android:launchMode="singleTask"
             tools:ignore="LockedOrientationActivity,DiscouragedApi">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.iris.robot" android:host="oauth" android:path="/callback" />
             </intent-filter>
         </activity>
     </application>

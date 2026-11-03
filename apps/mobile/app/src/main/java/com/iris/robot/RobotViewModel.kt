@@ -31,6 +31,8 @@ data class RobotUiState(
     val eglContext: EglBase.Context? = null,
     val accountEmail: String = "",
     val authBusy: Boolean = false,
+    val authorizationUrl: String? = null,
+    val awaitingGoogle: Boolean = false,
 )
 
 class RobotViewModel(application: Application) : AndroidViewModel(application) {
@@ -42,30 +44,67 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
     }; private set
     private var session: RobotSession? = null
     private var authJob: Job? = null
-    init { mutable.update { it.copy(accountEmail = initialSettings.accountEmail) } }
+    init {
+        // Credentials from the retired manual-code flow must sign in with Google.
+        if (initialSettings.accountToken.isNotBlank() && initialSettings.accountProvider != "google") {
+            initialSettings = initialSettings.copy(accountToken = "", accountEmail = "", accountExpiresAt = 0)
+            runCatching { store.save(initialSettings) }
+        }
+        mutable.update { it.copy(accountEmail = initialSettings.accountEmail, awaitingGoogle = initialSettings.pendingOAuth != null) }
+    }
     fun report(message: String) { mutable.update { it.copy(error = message) } }
     fun clearError() { mutable.update { it.copy(error = null) } }
-    fun link(hub: String, code: String, localHttp: Boolean) {
+    fun google(hub: String, localHttp: Boolean) {
         if (state.value.authBusy) return
         mutable.update { it.copy(authBusy = true, error = null) }
         authJob = viewModelScope.launch {
             try {
+                val attempt = OAuthAttempt.create()
                 val settings = initialSettings.copy(hub = hub.trim(), allowLocalSessionHttp = localHttp,
-                    accountToken = "", accountEmail = "", accountExpiresAt = 0)
-                val account = withContext(Dispatchers.IO) { AccountClient(settings).use { it.link(code) } }
+                    accountToken = "", accountEmail = "", accountExpiresAt = 0, pendingOAuth = attempt)
+                val result = withContext(Dispatchers.IO) { AccountClient(settings).use { it.begin(attempt) } }
+                ensureActive()
+                // Persist state and verifier before leaving for the browser. Android can
+                // recreate the process while Google is open; callback handling still works.
+                store.save(settings); initialSettings = settings
+                mutable.update { it.copy(authorizationUrl = result.authorization_url, awaitingGoogle = true) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { report(e.message ?: "Could not open Google sign-in. Check your laptop address.") }
+            finally { mutable.update { it.copy(authBusy = false) } }
+        }
+    }
+    fun browserOpened() { mutable.update { it.copy(authorizationUrl = null) } }
+    fun cancelGoogle() {
+        initialSettings = initialSettings.copy(pendingOAuth = null)
+        runCatching { store.save(initialSettings) }
+        mutable.update { it.copy(authorizationUrl = null, awaitingGoogle = false) }
+    }
+    fun googleCallback(raw: String) {
+        if (state.value.authBusy) return
+        val attempt = initialSettings.pendingOAuth ?: return
+        val result = try { attempt.callback(raw, System.currentTimeMillis()) }
+            catch (e: Exception) { report(e.message ?: "Invalid Google return link"); return }
+        if (result is OAuthResult.Failed) { cancelGoogle(); report(result.message); return }
+        result as OAuthResult.Success
+        mutable.update { it.copy(authBusy = true, error = null, authorizationUrl = null) }
+        val settings = initialSettings
+        authJob = viewModelScope.launch {
+            try {
+                val account = withContext(Dispatchers.IO) { AccountClient(settings).use { it.complete(result.code, attempt) } }
                 ensureActive()
                 require(account.token.isNotBlank() && account.expires_at_ms > System.currentTimeMillis()) { "Invalid account authorization" }
-                val linked = settings.copy(accountToken = account.token, accountEmail = account.user.email, accountExpiresAt = account.expires_at_ms)
+                val linked = settings.copy(accountToken = account.token, accountEmail = account.user.email, accountExpiresAt = account.expires_at_ms,
+                    accountProvider = "google", pendingOAuth = null)
                 store.save(linked); initialSettings = linked
-                mutable.update { it.copy(accountEmail = account.user.email) }
+                mutable.update { it.copy(accountEmail = account.user.email, awaitingGoogle = false) }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { report(e.message ?: "Could not sign in. Check your hotspot and laptop address.") }
+            catch (e: Exception) { cancelGoogle(); report(e.message ?: "Could not finish Google sign-in. Please try again.") }
             finally { mutable.update { it.copy(authBusy = false) } }
         }
     }
     private fun clearAccount(message: String? = null) {
         stop()
-        val cleared = initialSettings.copy(accountToken = "", accountEmail = "", accountExpiresAt = 0)
+        val cleared = initialSettings.copy(accountToken = "", accountEmail = "", accountExpiresAt = 0, accountProvider = "", pendingOAuth = null)
         initialSettings = cleared
         runCatching { store.save(cleared) }.onFailure { report("Could not clear saved credentials. Clear IRIS app storage in Android settings.") }
         mutable.update { it.copy(accountEmail = "", error = message ?: it.error) }
@@ -81,7 +120,7 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(authBusy = true, error = null) }
         authJob = viewModelScope.launch {
             try {
-                require(settings.hub == initialSettings.hub && settings.accountToken == initialSettings.accountToken) { "Link this backend before starting IRIS" }
+                require(settings.hub == initialSettings.hub && settings.accountToken == initialSettings.accountToken) { "Sign in before starting IRIS" }
                 val address = HubAddress.parse(settings.hub)
                 val account = withContext(Dispatchers.IO) { AccountClient(settings).use { it.me() } }
                 ensureActive()
@@ -89,7 +128,7 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
                 store.save(verified); initialSettings = verified
                 mutable.value = RobotUiState(running = true, accountEmail = account.user.email)
                 session = RobotSession(getApplication(), verified, address,
-                    { clearAccount("Your account connection ended. Link again from your laptop.") },
+                    { clearAccount("Your session ended. Continue with Google to sign in again.") },
                     { transform -> mutable.update(transform) })
                 session!!.start()
             } catch (e: CancellationException) { throw e }

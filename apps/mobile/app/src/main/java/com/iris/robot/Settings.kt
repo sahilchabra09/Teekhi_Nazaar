@@ -8,6 +8,7 @@ import android.util.Base64
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import com.iris.robot.core.Protocol
+import com.iris.robot.core.OAuthAttempt
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -26,6 +27,8 @@ import javax.crypto.spec.GCMParameterSpec
     val accountToken: String = "",
     val accountEmail: String = "",
     val accountExpiresAt: Long = 0,
+    val accountProvider: String = "",
+    val pendingOAuth: OAuthAttempt? = null,
 )
 
 /** The full settings blob is encrypted; ESP/broker/session secrets never enter ordinary preferences. */

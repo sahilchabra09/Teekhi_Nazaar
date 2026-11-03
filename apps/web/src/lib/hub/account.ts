@@ -9,16 +9,6 @@ export function accountServer() {
   return new URL(value).origin;
 }
 
-export async function accountRequest<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(new URL(path, accountServer()), {
-    method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
-    body: "{}", signal: signal ?? AbortSignal.timeout(15_000),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : "The account server is unavailable");
-  return body as T;
-}
-
 export async function authenticatedHubUrl(address: string, signal: AbortSignal) {
   const url = hubWebSocketUrl(address);
   const ticketUrl = new URL(url);
