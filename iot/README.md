@@ -1,6 +1,6 @@
 # IRIS appliance board
 
-A second ESP8266 runs three active-high outputs for the IRIS console’s appliance cards. Install this firmware on the appliance board. The robot uses the separate `bot/` project.
+The patient dashboard controls two appliances on a second ESP8266. The firmware supports three active-high outputs. Install this firmware on the appliance board. The robot uses the separate `bot/` project.
 
 ## Wiring
 
@@ -8,7 +8,7 @@ A second ESP8266 runs three active-high outputs for the IRIS console’s applian
 | --- | --- | --- | --- |
 | `d1` | **D0** | **GPIO16** | Appliance 1 driver input |
 | `d2` | D2 | GPIO4 | Appliance 2 driver input |
-| `d3` | **D5** | **GPIO14** | Appliance 3 driver input |
+| `d3` | **D5** | **GPIO14** | Spare output |
 | Setup | D6 | GPIO12 | Optional momentary switch to GND, sampled at boot |
 
 Use 3.3 V-compatible active-high driver inputs, a common signal ground, and an external pull-down on each input to keep it off during reset. GPIOs only supply logic signals. A relay coil needs a suitable driver and separate power. Once the firmware starts, all three outputs are LOW (off). An `on` command drives the selected output HIGH, and a reboot returns all outputs to off.

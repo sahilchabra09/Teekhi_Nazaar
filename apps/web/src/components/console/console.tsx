@@ -1,6 +1,6 @@
 "use client";
 
-import { Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, Settings2, Square, TriangleAlert, Volume2, X } from "lucide-react";
+import { ArrowLeft, Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, Settings2, Square, TriangleAlert, Volume2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -527,9 +527,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
       break;
 
     case "appliances":
-      // Three appliances, three cards, like every other screen.
       heading = "Appliances";
-      back = { label: "Back", onSelect: () => setView(home) };
       cards = APPLIANCE_PINS.map((pin, i) => {
         const state = appliances.states[pin];
         const pending = appliances.pending[pin];
@@ -553,6 +551,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
           onSelect: () => void toggleAppliance(pin),
         } satisfies PanelCard;
       });
+      cards.push({ kind: "action", key: "back", title: "Back to actions", icon: ArrowLeft, tone: "honey", onSelect: () => setView(home) });
       break;
 
     case "suggestions": {

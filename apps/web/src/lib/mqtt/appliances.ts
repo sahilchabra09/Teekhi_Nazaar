@@ -12,8 +12,8 @@ import { broker, TOPICS } from "./broker";
  * The board silently ignores a wrong password, so a command that never shows up in the state
  * report is flagged as unconfirmed.
  */
-/** The appliance board maps d1/d2/d3 to GPIO16/GPIO4/GPIO14. */
-export const APPLIANCE_PINS = ["d1", "d2", "d3"] as const;
+/** Patient controls use d1 (GPIO16) and d2 (GPIO4). */
+export const APPLIANCE_PINS = ["d1", "d2"] as const;
 export type AppliancePin = (typeof APPLIANCE_PINS)[number];
 export type PinState = "on" | "off";
 

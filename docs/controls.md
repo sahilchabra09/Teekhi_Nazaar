@@ -1,6 +1,6 @@
 # Patient console controls
 
-The console uses the robot phone for driving and a separate ESP8266 for the three appliance outputs. Both use the browser's shared MQTT WebSocket connection. Set `NEXT_PUBLIC_MQTT_BROKER_URL` **before building the web app** to the WebSocket listener for your broker. The default demo endpoint is `wss://broker.emqx.io:8084/mqtt`. Configure the phone and appliance board to use the corresponding broker. **Settings** in the patient bar contains microphone and laptop camera selection, and MQTT connection status.
+The console uses the robot phone for driving and a separate ESP8266 for the two patient-facing appliance controls. Both use the browser's shared MQTT WebSocket connection. Set `NEXT_PUBLIC_MQTT_BROKER_URL` **before building the web app** to the WebSocket listener for your broker. The default demo endpoint is `wss://broker.emqx.io:8084/mqtt`. Configure the phone and appliance board to use the corresponding broker. **Settings** in the patient bar contains microphone and laptop camera selection, and MQTT connection status.
 
 ## Drive from the phone camera
 
@@ -40,20 +40,19 @@ The phone enforces authorization and drive readiness locally. A broker PUBACK re
 
 ## Switch appliances
 
-Choose **Appliances** to switch a board output. The signed-in console gets the configured appliance password from the web server automatically. The mounted phone keeps the robot's driving password separately.
+Choose **Appliances** to switch either of the two outputs below. Select the highlighted **Back to actions** card to return to the main menu. The signed-in console gets the configured appliance password from the web server automatically. The mounted phone keeps the robot's driving password separately.
 
 | Card | MQTT key | NodeMCU pin | GPIO |
 | --- | --- | --- | --- |
 | Appliance 1 | `d1` | D0 | 16 |
 | Appliance 2 | `d2` | D2 | 4 |
-| Appliance 3 | `d3` | D5 | 14 |
 
 Wait for the board to report its state. Click a card or dwell on it to request the opposite state. The card shows the pending change until the board reports the requested output, or a timeout after five seconds. An incorrect password receives no confirmation.
 
 | Topic | Direction | Example |
 | --- | --- | --- |
-| `gazeconnect/appliances/control` | Browser → board, QoS 1, retain false | `{"password":"<appliance password>","pins":{"d3":"on"}}` |
-| `gazeconnect/appliances/state` | Board → browser, retained | `{"d1":"off","d2":"off","d3":"on"}` |
+| `gazeconnect/appliances/control` | Browser → board, QoS 1, retain false | `{"password":"<appliance password>","pins":{"d1":"on"}}` |
+| `gazeconnect/appliances/state` | Board → browser, retained | `{"d1":"on","d2":"off","d3":"off"}` |
 
 The appliance password travels inside each MQTT command. Use an access-controlled broker/network for real devices. For the board firmware, provisioning and driver wiring, see the [appliance board guide](../iot/README.md).
 
