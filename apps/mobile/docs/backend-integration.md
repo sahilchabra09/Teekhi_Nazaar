@@ -2,7 +2,7 @@
 
 ## Main frontend console
 
-The authenticated console at `/` uses `useRobotConnection` and the shared `createApplicationHub` adapter. Its main feed is the phone's video/audio, with a separate local-webcam preview sent to the phone. Incoming microphone requests stay on the listening page. One approval permits a matching capture and its result. Speech playback completes on the matching `tts_status`. A replacement connection stops the previous browser from automatically stealing the single web role back.
+The authenticated console at `/` uses `useRobotConnection` and the shared `createApplicationHub` adapter. Its main feed is the phone's video/audio, with a separate local-webcam preview sent to the phone. Incoming calls appear as one action card. One patient approval permits successive voice turns until the call ends. Speech playback completes on the matching `tts_status`. A replacement connection stops the previous browser from automatically stealing the single web role back.
 
 `NEXT_PUBLIC_SERVER_URL` points to the **same** Better Auth and media API (normally port 3000). The independent media URL override has been removed. On the phone, use that server's LAN IP or HTTPS hostname. See the [first-run instructions](../README.md#first-run).
 

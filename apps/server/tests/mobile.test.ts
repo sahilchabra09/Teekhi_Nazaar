@@ -16,10 +16,11 @@ function fixture(googleEnabled = true, robotOwnerId?: string, talkHandler?: (req
   const sessions = new Map(["alice", "bob"].map((id) => [id, account(id)]));
   for (const id of ["alice", "bob"]) sessions.set(`mobile-${id}`, { ...account(id), session: { ...account(id).session, id: `mobile-session-${id}` } });
   const callbacks = new Map<string, URL>();
+  let sessionGate: Promise<void> | undefined;
   const server = Bun.serve({ ...createRobotGateway({ origin, robotOwnerId, talkHandler, validationIntervalMs: 20,
     authBaseUrl: "http://localhost:3000", googleEnabled, connectSpeech,
     speech: connectSpeech ? { apiKey: "test", sttModel: "test", ttsModel: "test" } : undefined,
-    resolve: async (headers) => sessions.get(headers.get("cookie") ?? "") ?? null,
+    resolve: async (headers) => { await sessionGate; return sessions.get(headers.get("cookie") ?? "") ?? null; },
     authHandler: async (request) => {
       const body = await request.json() as { provider: string; callbackURL: string; errorCallbackURL: string };
       expect(body.provider).toBe("google");
@@ -67,7 +68,7 @@ function fixture(googleEnabled = true, robotOwnerId?: string, talkHandler?: (req
     await until(() => ws.readyState === WebSocket.OPEN);
     return { ws, messages };
   };
-  return { server, sessions, base, api, signIn, socket, begin };
+  return { server, sessions, base, api, signIn, socket, begin, holdSessions: (gate: Promise<void>) => { sessionGate = gate; } };
 }
 
 test("the same mobile bearer reconnects up to seven days, bounded by its parent session", async () => {
@@ -114,7 +115,7 @@ test("losing and replacing the phone transport preserves its original account to
 });
 
 type TestPeer = Awaited<ReturnType<ReturnType<typeof fixture>["socket"]>>;
-const listen = (peer: TestPeer, action: string, id: string) => peer.ws.send(JSON.stringify({ type: "listen", action, request_id: id, ts: Date.now() }));
+const listen = (peer: TestPeer, action: string, id: string, fields: Record<string, unknown> = {}) => peer.ws.send(JSON.stringify({ type: "listen", action, request_id: id, ...fields, ts: Date.now() }));
 const gotListen = (peer: TestPeer, action: string, id: string) => peer.messages.some(m => m.type === "listen" && m.action === action && m.request_id === id);
 async function approve(phone: TestPeer, web: TestPeer, id: string) {
   listen(phone, "request", id);
@@ -235,7 +236,7 @@ test("replacing the approving web peer suppresses an in-flight transcript and it
   expect(replacement.messages.some(m => m.type === "talk_result")).toBe(false);
 });
 
-test("streaming requires the granted ID and stops accepting PCM after one final transcript", async () => {
+test.each([false, true])("streaming requires the granted ID and stops accepting PCM after one final transcript (continuous=%s)", async continuous => {
   const received: (string | Buffer)[] = [];
   const provider = Bun.serve({
     port: 0, hostname: "127.0.0.1",
@@ -252,20 +253,36 @@ test("streaming requires the granted ID and stops accepting PCM after one final 
   const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
   const headers = { authorization: "Bearer " + token };
   expect((await fetch(f.base + "/api/mobile/speech", { headers })).status).toBe(403);
-  await approve(phone, web, "stream");
-  const stream = new WebSocket(f.base.replace("http:", "ws:") + "/api/mobile/speech", { headers });
+  if (continuous) await approveCall(phone, web, "stream");
+  else await approve(phone, web, "stream");
+  const fields = continuous ? {call_id: "stream"} : {};
+  const socketUrl = f.base.replace("http:", "ws:") + "/api/mobile/speech";
+  if (continuous) expect((await fetch(f.base + "/api/mobile/speech?call_id=stream&request_id=wrong", {headers})).status).toBe(403);
+  const stream = new WebSocket(socketUrl + (continuous ? "?call_id=stream&request_id=stream" : ""), { headers });
   await until(() => stream.readyState === WebSocket.OPEN);
   const pcm = new Uint8Array(100);
   stream.send(JSON.stringify({ action: "resume" })); stream.send(pcm);
-  stream.send(JSON.stringify({ action: "start", request_id: "guessed" })); stream.send(pcm);
-  stream.send(JSON.stringify({ action: "start", request_id: "stream" })); stream.send(pcm);
+  stream.send(JSON.stringify({ action: "start", ...fields, request_id: "guessed" })); stream.send(pcm);
+  if (continuous) { stream.send(JSON.stringify({action: "start", call_id: "wrong", request_id: "stream"})); stream.send(pcm); }
+  stream.send(JSON.stringify({ action: "start", ...fields, request_id: "stream" })); stream.send(pcm);
   await until(() => received.length > 0);
   expect(received).toHaveLength(1);
-  stream.send(JSON.stringify({ action: "stop", request_id: "stream" })); stream.send(pcm);
+  stream.send(JSON.stringify({ action: "stop", ...fields, request_id: "stream" })); stream.send(pcm);
   await until(() => web.messages.some(m => m.type === "talk_result" && m.request_id === "stream"));
   expect(received.filter(m => typeof m !== "string")).toHaveLength(1);
   expect(web.messages.filter(m => m.type === "talk_result")).toHaveLength(1);
   expect((await fetch(f.base + "/api/mobile/speech", { headers })).status).toBe(403);
+  if (continuous) {
+    await until(() => stream.readyState === WebSocket.CLOSED);
+    listen(phone, "next", "abandoned", {call_id: "stream"});
+    await turnStarted(phone, web, "stream", "abandoned");
+    const abandoned = new WebSocket(socketUrl + "?call_id=stream&request_id=abandoned", {headers});
+    await until(() => abandoned.readyState === WebSocket.OPEN);
+    abandoned.close();
+    await until(() => web.messages.some(m => m.state === "failed" && m.call_id === "stream" && m.request_id === "abandoned"));
+    listen(phone, "next", "after-close", {call_id: "stream"});
+    await turnStarted(phone, web, "stream", "after-close");
+  }
 });
 
 test("pending and active approvals expire even when their timer callback is delayed", async () => {
@@ -283,6 +300,114 @@ test("pending and active approvals expire even when their timer callback is dela
     expect((await fetch(f.base + "/api/utterance", { method: "POST", headers: { authorization: "Bearer " + token }, body })).status).toBe(403);
     await until(() => gotListen(web, "cancel", "active"));
   } finally { setSystemTime(); }
+});
+
+async function approveCall(phone: TestPeer, web: TestPeer, call: string) {
+  listen(phone, "request", call, { continuous: true });
+  await until(() => gotListen(web, "request", call));
+  expect(web.messages.find(m => m.action === "request" && m.request_id === call)?.continuous).toBe(true);
+  listen(web, "start", call, { continuous: true });
+  await turnStarted(phone, web, call, call);
+}
+
+function turnStarted(phone: TestPeer, web: TestPeer, call: string, turn: string) {
+  return until(() => [phone, web].every(peer => peer.messages.some(m =>
+    m.action === "start" && m.continuous === true && m.call_id === call && m.request_id === turn)));
+}
+
+function uploadTurn(base: string, token: string, call: string, turn: string) {
+  const body = new FormData(); body.set("utterance_id", turn); body.set("text", "hello"); body.set("call_id", call);
+  return fetch(base + "/api/utterance", { method: "POST", headers: { authorization: "Bearer " + token }, body });
+}
+
+test("a continuous call outlives the single-turn timeout, preserves conversation context and ends explicitly", async () => {
+  const conversations: (string | undefined)[] = [];
+  const f = fixture(true, undefined, async request => {
+    conversations.push((await request.json() as { conversationId?: string }).conversationId);
+    return Response.json({ status: "ok", heard: "hello", conversationId: "conversation-one" });
+  });
+  const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  await approveCall(phone, web, "call");
+  try {
+    setSystemTime(new Date(Date.now() + 180_000));
+    expect((await uploadTurn(f.base, token, "wrong-call", "call")).status).toBe(403);
+    expect((await uploadTurn(f.base, token, "call", "call")).status).toBe(200);
+    await until(() => web.messages.some(m => m.type === "talk_result" && m.call_id === "call" && m.request_id === "call"));
+    listen(phone, "next", "second", {call_id: "call"});
+    await turnStarted(phone, web, "call", "second");
+    expect((await uploadTurn(f.base, token, "call", "second")).status).toBe(200);
+    expect(conversations).toEqual([undefined, "conversation-one"]);
+    await until(() => phone.messages.some(m => m.state === "ready" && m.call_id === "call" && m.request_id === "second"));
+    listen(phone, "next", "second", {call_id: "call"});
+    listen(phone, "next", "third", {call_id: "call"});
+    await turnStarted(phone, web, "call", "third");
+    expect((await uploadTurn(f.base, token, "call", "second")).status).toBe(403);
+    listen(web, "cancel", "call", {call_id: "call"});
+    await until(() => phone.messages.some(m => m.action === "cancel" && m.call_id === "call" && m.request_id === "call"));
+    listen(phone, "next", "fourth", {call_id: "call"});
+    expect((await uploadTurn(f.base, token, "call", "third")).status).toBe(403);
+    expect((await uploadTurn(f.base, token, "call", "fourth")).status).toBe(403);
+    expect(web.messages.filter(m => m.action === "request")).toHaveLength(1);
+  } finally { setSystemTime(); }
+});
+
+test("TTS pause during processing aborts that turn, then a new turn can run until a control peer leaves", async () => {
+  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const f = fixture(true, undefined, async () => { started.resolve(); await release.promise; return Response.json({status: "ok"}); });
+  const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  await approveCall(phone, web, "call");
+  const upload = uploadTurn(f.base, token, "call", "call");
+  await started.promise;
+  listen(phone, "pause", "call", {call_id: "call"});
+  await until(() => phone.messages.some(m => m.state === "paused" && m.call_id === "call" && m.request_id === "call"));
+  listen(phone, "next", "after-tts", {call_id: "call"});
+  await turnStarted(phone, web, "call", "after-tts");
+  release.resolve();
+  expect((await upload).status).toBe(403);
+  expect(web.messages.some(m => m.type === "talk_result")).toBe(false);
+  phone.ws.send(JSON.stringify({type: "speech_state", state: "no_speech", call_id: "call", request_id: "after-tts", ts: Date.now()}));
+  await until(() => web.messages.some(m => m.state === "no_speech" && m.call_id === "call" && m.request_id === "after-tts"));
+  web.ws.close();
+  await until(() => gotListen(phone, "cancel", "call"));
+  await f.socket("web", "alice");
+  listen(phone, "next", "after-disconnect", {call_id: "call"});
+  expect((await uploadTurn(f.base, token, "call", "after-disconnect")).status).toBe(403);
+});
+
+test("pause or End call during next-turn authentication cannot revive a retired turn", async () => {
+  const f = fixture(true, undefined, async () => Response.json({}));
+  const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  await approveCall(phone, web, "call");
+  listen(phone, "pause", "call", {call_id:"call"});
+  await until(() => phone.messages.some(m => m.state === "paused" && m.request_id === "call"));
+  const checks = Promise.withResolvers<void>();
+  f.holdSessions(checks.promise);
+  listen(phone, "next", "paused-next", {call_id:"call"});
+  listen(phone, "pause", "paused-next", {call_id:"call"});
+  await until(() => phone.messages.some(m => m.state === "paused" && m.request_id === "paused-next"));
+  listen(phone, "next", "canceled-next", {call_id:"call"});
+  listen(phone, "cancel", "call", {call_id:"call"});
+  await until(() => gotListen(web, "cancel", "call"));
+  checks.resolve();
+  expect((await uploadTurn(f.base, token, "call", "canceled-next")).status).toBe(403);
+  expect(phone.messages.filter(m => m.action === "start").map(m => m.request_id)).toEqual(["call"]);
+});
+
+test("one-sided continuous opt-in only approves one utterance", async () => {
+  const f = fixture(true, undefined, async () => Response.json({status: "ok"}));
+  const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  for (const phoneOptsIn of [false, true]) {
+    const id = String(phoneOptsIn);
+    listen(phone, "request", id, {continuous: phoneOptsIn});
+    await until(() => gotListen(web, "request", id));
+    listen(web, "start", id, {continuous: !phoneOptsIn});
+    await until(() => gotListen(phone, "start", id));
+    expect(phone.messages.find(m => m.action === "start" && m.request_id === id)?.continuous).not.toBe(true);
+    const form = new FormData(); form.set("utterance_id", id); form.set("text", "hello");
+    expect((await fetch(f.base + "/api/utterance", {method:"POST", headers: {authorization: "Bearer "+token}, body: form})).status).toBe(200);
+    listen(phone, "next", "extra-"+id, {call_id:id});
+    expect((await uploadTurn(f.base, token, id, "extra-"+id)).status).toBe(403);
+  }
 });
 
 test("manual-code routes are removed; socket tickets require a signed-in browser and trusted origin", async () => {

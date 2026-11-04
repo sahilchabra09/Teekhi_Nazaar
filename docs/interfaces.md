@@ -72,7 +72,7 @@ Speech, suggestions, and media must not silently arm driving. The AI never publi
 
 ## Audio upload
 
-The paired phone requests one turn with `listen/request` (`type: "listen"`, `action: "request"`, `request_id`, `ts`). The signed-in patient approves the same ID with `listen/start` from the listening page. A pending request expires after 60 seconds. `stop` finishes the approved capture, and `cancel` discards it. The phone reports matching `speech_state` and the approving dashboard receives one `talk_result`. `POST /api/utterance` accepts the approved phone’s multipart WAV or Android text only with the matching `utterance_id`. Cloud PCM uses the same authorization. Account IDs in client payloads cannot select a recipient. See the [speech workflow](./speech-workflow.md).
+The phone sends `listen/request` with a unique `request_id` and `continuous:true`. The paired patient’s **Answer call** selection sends `listen/start` for that ID with `continuous:true`. The API verifies both sessions, the patient role, and both room peers. The initial request ID becomes the `call_id`. Further phone `listen/next` messages use the same `call_id` and a fresh `request_id`; the server announces each accepted turn with `listen/start`. Turn status, uploads, and results bind to both IDs. `listen/pause` can discard the current turn during playback without ending the call. `listen/cancel` with the original call ID ends it. Unanswered requests expire after 60 seconds. Approved calls remain open until ended or their authenticated pair is lost. If either client omits continuous opt-in, the original single-turn contract applies. See the [speech workflow](./speech-workflow.md).
 
 ## Browser module contracts
 

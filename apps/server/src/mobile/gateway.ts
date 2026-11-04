@@ -219,7 +219,7 @@ export function createRobotGateway(options: SpeechOptions & {
         const identity = await pairing.phone(request.headers);
         if (!identity) return new Response("Unauthorized", { status: 401 });
         if (!options.speech) return new Response("Deepgram is not configured", { status: 503 });
-        const turn = await speech.authorizeStream(identity);
+        const turn = await speech.authorizeStream(identity, url.searchParams);
         if (!turn) return new Response("A current patient approval is required", { status: 403 });
         if (server.upgrade(request, { data: { role: "phone", identity, speech: turn, window: Date.now(), messages: 0 } })) return;
         return new Response("WebSocket required", { status: 426 });
