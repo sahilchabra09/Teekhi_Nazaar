@@ -123,8 +123,14 @@ import androidx.compose.ui.viewinterop.AndroidView
             HorizontalDivider(color = Clay.Pine.copy(alpha = .08f))
         }
         SectionLabel("Connection")
+        if (!signedIn) TextButton(onClick = { change(draft.withUsbConnection()) }, enabled = !busy) {
+            Text("Use USB connection")
+        }
         IrisField("Server address", draft.hub, enabled = !signedIn && !busy,
-            hint = "localhost:3000", keyboard = KeyboardType.Uri) { change(draft.copy(hub = it)) }
+            hint = USB_HUB, keyboard = KeyboardType.Uri) { hub ->
+            val localHttp = draft.allowLocalSessionHttp && (draft.hub != USB_HUB || hub == USB_HUB)
+            change(draft.copy(hub = hub, allowLocalSessionHttp = localHttp))
+        }
         if (signedIn) Text("Sign out to change the server.", style = MaterialTheme.typography.bodySmall, color = Clay.Soft)
         else SettingToggle("Local connection (HTTP)", draft.allowLocalSessionHttp, !busy,
             "For a private laptop or USB connection.") { change(draft.copy(allowLocalSessionHttp = it)) }

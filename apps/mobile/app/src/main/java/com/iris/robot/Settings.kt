@@ -1,6 +1,7 @@
 package com.iris.robot
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.annotation.SuppressLint
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -31,9 +32,14 @@ import javax.crypto.spec.GCMParameterSpec
     val pendingOAuth: OAuthAttempt? = null,
 )
 
+internal const val USB_HUB = "localhost:3000"
+
+internal fun RobotSettings.withUsbConnection() = copy(hub = USB_HUB, allowLocalSessionHttp = true)
+
 /** The full settings blob is encrypted; ESP/broker/session secrets never enter ordinary preferences. */
 class SettingsStore(context: Context) {
     private val preferences = context.getSharedPreferences("iris-encrypted-settings", Context.MODE_PRIVATE)
+    private val debugBuild = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     private val alias = "iris-settings-v1"
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -44,7 +50,11 @@ class SettingsStore(context: Context) {
         }.generateKey()
     }
     fun load(): RobotSettings {
-        val stored = preferences.getString("settings", null) ?: return RobotSettings()
+        val stored = preferences.getString("settings", null)
+        if (stored == null) {
+            val defaults = RobotSettings()
+            return if (debugBuild) defaults.withUsbConnection() else defaults
+        }
         val parts = stored.split(":")
         require(parts.size == 2) { "Saved settings are unreadable" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
