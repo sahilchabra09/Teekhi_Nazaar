@@ -1,11 +1,9 @@
 "use client";
 
-import { Eye, EyeOff, RefreshCw, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { RefreshCw, X } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 import { broker, BROKER_URL, type BrokerStatus, useBrokerStatus } from "@/lib/mqtt/broker";
-import { saveControlSettings, useControlSettings } from "@/lib/mqtt/settings";
 import type { useRobotConnection } from "@/lib/robot/use-robot-connection";
 import { DevicePicker, MicPicker } from "./mic-picker";
 
@@ -17,7 +15,6 @@ const STATUS_TEXT: Record<BrokerStatus, string> = {
 type SettingsProps = {
   open: boolean;
   onClose: () => void;
-  reason?: string | null;
   micId: string;
   onMicChange: (id: string) => void;
   micListVersion: number;
@@ -28,24 +25,19 @@ export function ControlSettingsDialog({ open, ...props }: SettingsProps) {
   return open ? <SettingsContents {...props} /> : null;
 }
 
-function SettingsContents({ onClose, reason, micId, onMicChange, micListVersion, connection }: Omit<SettingsProps, "open">) {
-  const saved = useControlSettings();
+function SettingsContents({ onClose, micId, onMicChange, micListVersion, connection }: Omit<SettingsProps, "open">) {
   const { status, error } = useBrokerStatus();
-  const [password, setPassword] = useState(saved.appliancePassword);
-  const [showPassword, setShowPassword] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
-  const passwordField = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const element = dialog.current;
     const opener = document.activeElement;
     element?.showModal();
-    if (reason) passwordField.current?.focus();
     return () => {
       element?.close();
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true });
     };
-  }, [reason]);
+  }, []);
 
   return <dialog ref={dialog} aria-labelledby="dashboard-settings-title"
     onCancel={(event) => { event.preventDefault(); onClose(); }}
@@ -72,29 +64,6 @@ function SettingsContents({ onClose, reason, micId, onMicChange, micListVersion,
 
       <section aria-labelledby="appliance-settings-title" className="mt-5 border-t border-pine/15 pt-4">
         <h3 id="appliance-settings-title" className="text-xs font-bold uppercase tracking-widest text-teal">Hardware</h3>
-        {reason && <p className="mt-3 rounded-lg bg-honey/20 px-3 py-2 text-sm font-medium">{reason}</p>}
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          saveControlSettings({ appliancePassword: password });
-          toast.success("Appliance password saved");
-          onClose();
-        }} className="mt-3">
-          <label htmlFor="appliance-password" className="text-sm font-bold">Appliance password</label>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <div className="relative min-w-0 flex-1">
-              <input ref={passwordField} id="appliance-password" type={showPassword ? "text" : "password"}
-                value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="off"
-                className="h-11 w-full rounded-xl border border-pine/20 bg-white px-3 pr-11 text-sm focus-visible:outline-2 focus-visible:outline-teal" />
-              <button type="button" onClick={() => setShowPassword(!showPassword)}
-                aria-label={showPassword ? "Hide appliance password" : "Show appliance password"}
-                className="absolute inset-y-0 right-0 grid w-11 place-items-center rounded-xl text-pine-soft hover:text-pine focus-visible:outline-2 focus-visible:outline-teal">
-                {showPassword ? <EyeOff aria-hidden className="size-4" /> : <Eye aria-hidden className="size-4" />}
-              </button>
-            </div>
-            <button type="submit" className="min-h-11 rounded-xl bg-mist px-3 text-sm font-semibold text-teal hover:bg-teal/10 focus-visible:outline-2 focus-visible:outline-teal">Save password</button>
-          </div>
-        </form>
-        <p className="mt-2 text-xs text-pine-soft">Configure the robot driving password on the paired phone.</p>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-xl bg-mist/60 px-3 py-2">
           <div className="min-w-0">
             <p className="text-sm font-semibold" role="status">MQTT · {STATUS_TEXT[status]}</p>

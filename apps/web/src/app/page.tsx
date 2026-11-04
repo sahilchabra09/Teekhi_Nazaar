@@ -10,5 +10,6 @@ export default async function HomePage() {
   if (!user.role) redirect("/onboarding");
   if (user.role === "doctor") redirect("/doctor");
 
-  return <Console userName={user.name || user.email} />;
+  const appliancePassword = process.env.APPLIANCE_CONTROL_PASSWORD ?? "";
+  return <Console userName={user.name || user.email} appliancePassword={appliancePassword} />;
 }

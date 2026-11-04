@@ -11,7 +11,6 @@ import { authClient } from "@/lib/auth-client";
 import { APPLIANCE_PINS, type AppliancePin, useAppliances } from "@/lib/mqtt/appliances";
 import { broker, useBrokerStatus } from "@/lib/mqtt/broker";
 import { DRIVE_INTERVAL_MS, DRIVE_TOPIC, DrivePublisher, type DriveAction, type DriveSource, type Direction } from "@/lib/mqtt/robot";
-import { useControlSettings } from "@/lib/mqtt/settings";
 import { conversationReducer, initialConversation } from "@/lib/robot/conversation";
 import type { ConsoleView as View, ReplySource } from "@/lib/robot/conversation";
 import { useRobotConnection } from "@/lib/robot/use-robot-connection";
@@ -30,7 +29,7 @@ import { type PanelCard, SidePanel } from "./side-panel";
 const QUICK_PHRASES = ["Please come here.", "I need some help.", "Could you repeat that?"];
 const TONES = ["teal", "honey", "sky"] as const;
 
-export default function Console({ userName }: { userName: string }) {
+export default function Console({ userName, appliancePassword }: { userName: string; appliancePassword: string }) {
   const router = useRouter();
   const [mode, setMode] = useState<PatientMode>("manual");
   const connection = useRobotConnection();
@@ -67,10 +66,8 @@ export default function Console({ userName }: { userName: string }) {
 
   useEffect(() => broker.acquire(), []); // one shared connection for both features
   const brokerState = useBrokerStatus();
-  const controls = useControlSettings();
   const appliances = useAppliances();
-  const [settings, setSettings] = useState<{ open: boolean; reason: string | null }>({ open: false, reason: null });
-  const openSettings = useCallback((reason: string | null = null) => setSettings({ open: true, reason }), []);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Surface connection problems once per distinct message.
   const lastBrokerError = useRef<string | null>(null);
@@ -100,11 +97,11 @@ export default function Console({ userName }: { userName: string }) {
   const stop = useCallback((explicit = false) => { void driver.stop(explicit); }, [driver]);
 
   useLayoutEffect(() => {
-    available.current = mode !== "setup" && view.name === "drive" && connected && hasFeed && !settings.open && !signingOut;
+    available.current = mode !== "setup" && view.name === "drive" && connected && hasFeed && !settingsOpen && !signingOut;
     if (!available.current) void driver.stop();
     if (!connected) driver.revoke();
     if (!hasFeed) frameAt.current = -Infinity;
-  }, [driver, mode, view.name, connected, hasFeed, settings.open, signingOut]);
+  }, [driver, mode, view.name, connected, hasFeed, settingsOpen, signingOut]);
 
   useEffect(() => {
     const hub = connection.hub;
@@ -143,15 +140,14 @@ export default function Console({ userName }: { userName: string }) {
 
   const toggleAppliance = useCallback(
     async (pin: AppliancePin) => {
-      if (!controls.appliancePassword) return openSettings("Enter the appliance password to switch appliances.");
       if (appliances.pending[pin]) return; // already on its way
       try {
-        await appliances.toggle(pin, controls.appliancePassword);
+        await appliances.toggle(pin, appliancePassword);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn’t switch the appliance.");
       }
     },
-    [appliances, controls.appliancePassword, openSettings],
+    [appliances, appliancePassword],
   );
 
   // ── events from the robot phone over the hub (docs/interfaces.md §3)
@@ -413,7 +409,7 @@ export default function Console({ userName }: { userName: string }) {
     setMode(next);
   }, [stop, abortWork, endConversation]);
 
-  const settingsButton = useDwell(() => openSettings());
+  const settingsButton = useDwell(() => setSettingsOpen(true));
   const signOutButton = useDwell(() => void signOut(), { ms: 1500, disabled: signingOut });
 
   // ───────────────────────────── panel content per view ─────────────────────────────
@@ -534,7 +530,6 @@ export default function Console({ userName }: { userName: string }) {
       // Three appliances, three cards, like every other screen.
       heading = "Appliances";
       back = { label: "Back", onSelect: () => setView(home) };
-      extra = { label: "Password", icon: "settings", onSelect: () => openSettings() };
       cards = APPLIANCE_PINS.map((pin, i) => {
         const state = appliances.states[pin];
         const pending = appliances.pending[pin];
@@ -547,7 +542,7 @@ export default function Console({ userName }: { userName: string }) {
           hint: pending
             ? `Turning ${pending}…`
             : noReply
-              ? "No reply. Check the password"
+              ? "No reply from appliance board"
               : state === "on"
                 ? "On · look here to turn off"
                 : state === "off"
@@ -649,7 +644,7 @@ export default function Console({ userName }: { userName: string }) {
           home={view.name === "home"}
         />
       </section>
-      <ControlSettingsDialog open={settings.open} reason={settings.reason} onClose={() => setSettings({ open: false, reason: null })}
+      <ControlSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)}
         micId={micId} onMicChange={setMicId} micListVersion={micListVersion} connection={connection} />
     </main>
   );

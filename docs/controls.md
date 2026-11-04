@@ -1,6 +1,6 @@
 # Patient console controls
 
-The console uses the robot phone for driving and a separate ESP8266 for the three appliance outputs. Both use the browser's shared MQTT WebSocket connection. Set `NEXT_PUBLIC_MQTT_BROKER_URL` **before building the web app** to the WebSocket listener for your broker. The default demo endpoint is `wss://broker.emqx.io:8084/mqtt`. Configure the phone and appliance board to use the corresponding broker. **Settings** in the patient bar contains microphone and laptop camera selection, the appliance password and MQTT connection status.
+The console uses the robot phone for driving and a separate ESP8266 for the three appliance outputs. Both use the browser's shared MQTT WebSocket connection. Set `NEXT_PUBLIC_MQTT_BROKER_URL` **before building the web app** to the WebSocket listener for your broker. The default demo endpoint is `wss://broker.emqx.io:8084/mqtt`. Configure the phone and appliance board to use the corresponding broker. **Settings** in the patient bar contains microphone and laptop camera selection, and MQTT connection status.
 
 ## Drive from the phone camera
 
@@ -40,11 +40,11 @@ The phone enforces authorization and drive readiness locally. A broker PUBACK re
 
 ## Switch appliances
 
-Choose **Appliances** and enter the dedicated appliance password via **Password** or **Settings** in the patient bar. This password is stored in this browser. The robot's motor password belongs on the mounted phone. Opening an existing console removes the old browser-stored robot password when storage is writable.
+Choose **Appliances** to switch a board output. The signed-in console gets the configured appliance password from the web server automatically. The mounted phone keeps the robot's driving password separately.
 
 | Card | MQTT key | NodeMCU pin | GPIO |
 | --- | --- | --- | --- |
-| Appliance 1 | `d1` | D1 | 5 |
+| Appliance 1 | `d1` | D0 | 16 |
 | Appliance 2 | `d2` | D2 | 4 |
 | Appliance 3 | `d3` | D5 | 14 |
 
