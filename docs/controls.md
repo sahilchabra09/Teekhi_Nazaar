@@ -4,11 +4,14 @@ The console uses the robot phone for driving and a separate ESP8266 for the two 
 
 ## Drive from the phone camera
 
+For a shared robot, set `IRIS_ROBOT_OWNER_ID="*"` in the API server’s local environment. Any signed-in patient can pair a phone and dashboard under their own account. One pair holds the car at a time. A competing pair receives HTTP 409 while the current pair is renewing its grant. Disconnect that pair to hand over the car. The API reserves up to 10 seconds at startup or handoff for an earlier grant to expire. A specific user ID restricts driving to one owner. An empty setting disables drive grants.
+
 1. Open the console on HTTPS or localhost for camera access and Web Crypto. On the mounted phone, enable the robot controller and configure its MQTT settings and ESP password. Start IRIS. Sign in to the laptop console with the same authorized account and choose **Connect phone** inside the robot video. Wait for a live camera picture.
 2. On the phone, open **Session settings**, tap **Calibrate**, **Authorize**, then **Enable driving** once the robot is online.
 3. In the patient dashboard choose **Setup**. After Screen 1 calibration and the accuracy check, look at or click **Continue to dashboard** to use **Drive**, **Communicate**, and **Appliances** with gaze. If accuracy is still unverified, choose **Open dashboard in preview** to navigate with the camera still running. Choose **Check gaze accuracy** in Setup to enable gaze control of actions such as answering calls, speaking messages, driving and switching appliances. Choose **Drive** to show the directional regions.
-4. Fixate on a labelled region of the phone video for 1.2 seconds. Keep looking there to continue. The outer columns turn left and right. The middle column drives forward at the top, stops in the centre and reverses at the bottom. You can also press and hold a region with a pointer or focus it and hold Space or Enter.
-5. Look away, release the control, or select **Stop** to end the movement. The red **Stop** target is in the center of the robot picture. While confirmation is pending, it reads **Retry stop**. Select it to send a fresh signed stop. The status below the picture shows when the phone reports that driving is disarmed. A stop disarms the phone. Tap **Enable driving** on the phone and make a new selection before the next movement.
+4. For mouse testing, go to **Settings → Use mouse gaze**. Move the mouse over the same card or video region and leave it there for 1.2 seconds. **Turn off mouse gaze** restores ordinary clicking. Both mouse gaze and validated eye input use the same drive controls and phone authorization.
+5. Select **Drive**. Hold the top box to move forward, the bottom to reverse, or a side box to turn. Movement continues while you stay in that box. Leaving it brings the wheels to zero. After a 1.2-second hold in the next box, the robot moves in the new direction. The center **Stop** box leaves the wheels at zero, ready for another direction.
+6. Select **Drive** again to exit and disarm. A connection, video, or tracking fault also stops the drive session. After a hard stop, explicitly enable driving on the phone before starting again. Phones older than IRIS 0.8.1 use a hard stop on each release.
 
 To send a local camera view back to the phone, pick **Shared camera** in **Settings**, then choose **Share camera** in the video panel. If the picture drops during an authorized drive session, the center can still send a stop. Movement requires the robot picture. Controls require recent robot frames, a connected phone and broker, a current grant, and a fresh `ready` status from the calibrated phone with its ESP online. During a hold the phone may report `driving`. The console stops renewing if gaze or feed is lost, the tab loses focus or is hidden, a modal opens, or the grant, connection or mobile status becomes unusable. It attempts a signed stop for an active hold. The phone's intention timeout also disarms it if updates stop arriving.
 
@@ -21,7 +24,9 @@ To send a local camera view back to the phone, pick **Shared camera** in **Setti
 | Phone → MQTT Topic 1 → browser | Nonretained `type: "mobile_status"` for the same device and session. The console expires reports after 2.5 seconds. |
 | Phone → MQTT Topic 2 → robot ESP | The phone validates signatures, sequence and TTL, computes wheel effort and sends the password-bearing `lain-mobile` motor envelope to `carbot/command`. |
 
-Each intention names the device and control session, has a unique `command_id` and increasing integer `seq`, and uses `forward`, `backward`, `left`, `right` or `stop`. Speed uses a 0–100 scale. This console requests 35 for movement and 0 for stop. `sent_at` is an ISO 8601 UTC timestamp based on the server clock. `ttl_ms` is at most 300 ms and bounded by remaining lease time.
+Each intention names the device and control session, has a unique `command_id` and increasing integer `seq`, and uses `forward`, `backward`, `left`, `right`, `neutral` or `stop`. Speed uses a 0–100 scale. This console requests 35 for movement and 0 for neutral or stop. `sent_at` is an ISO 8601 UTC timestamp based on the server clock. `ttl_ms` is at most 300 ms and bounded by remaining lease time.
+
+A phone advertising `supports_neutral: true` accepts signed `neutral` with speed 0. It immediately sends a QoS 1 zero-wheel command to the ESP and reports `ready` with the matching `last_command_id` if its enabled session is healthy. The browser waits for that acknowledgement before sending another direction. A missing acknowledgement escalates to a hard stop. `neutral` never enables a disabled or faulted phone.
 
 For `signature`, join the following field **values** with a single LF between each, using decimal integers and the exact timestamp string. Compute HMAC-SHA256 over these UTF-8 bytes with the decoded signing key and encode the result as lowercase hex. There is no trailing LF.
 
@@ -40,11 +45,11 @@ The phone enforces authorization and drive readiness locally. A broker PUBACK re
 
 ## Navigate by gaze
 
-Look at **Communicate** or **Quick phrases** for 1.2 seconds. The ring around the cursor and the fill on the card show measured progress. Looking away or losing tracking resets an incomplete selection. In dashboard preview, gaze can open navigation cards and choose a phrase to review. When a control needs verified gaze, the patient bar shows **Check accuracy to use this control**. Sample and prerecorded inputs show **Demo preview** and use the same navigation restrictions.
+Look at **Communicate** or **Quick phrases** for 1.2 seconds. The ring around the cursor and the fill on the card show measured progress. Looking away or losing tracking resets an incomplete selection. In dashboard preview, gaze can open navigation cards and choose a phrase to review. Every target shows dwell progress. The patient bar explains when an action needs verified gaze or when a board or phone is unavailable. Sample and prerecorded inputs show **Demo preview** and use the same navigation restrictions.
 
 **Communicate** stays in the middle of the action panel. Select it to open the communication choices. Look away and select it again to return to the main actions. **Quick phrases** works the same way. It opens three phrase cards below the video, and selecting **Quick phrases** again closes them. Choosing a phrase opens a confirmation before anyone hears it.
 
-In **Drive**, select **Drive** again to leave driving. Use the center **Stop** target to disarm the phone while staying in Drive. During eye setup, select an available numbered step to revisit it.
+In **Drive**, select **Drive** again to leave driving. Use the center **Stop** target to hold the wheels at zero while staying in Drive. During eye setup, select an available numbered step to revisit it.
 
 ## Answer a conversation request
 

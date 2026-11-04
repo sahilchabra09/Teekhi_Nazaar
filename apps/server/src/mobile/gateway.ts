@@ -27,7 +27,12 @@ export function createRobotGateway(options: SpeechOptions & {
   const ttsBusy = new Set<string>();
   const rooms = new Map<string, Map<Role, Peer>>();
   const deviceId = "esp12e_carbot";
-  let lease: { control_session_id: string; signing_key: string; expires_at_ms: number } | undefined;
+  const sharedDrive = options.robotOwnerId === "*";
+  const driveEligible = (id: string) => sharedDrive || id === options.robotOwnerId;
+  let lease: { phone: Peer; web: Peer; id: string; key: string; expires: number } | undefined;
+  const driveLeaseMs = 10_000;
+  // After a restart, a previous instance’s final grant may still be usable on the car.
+  let sharedReservedUntil = sharedDrive ? Date.now() + driveLeaseMs : 0;
   const app = new Hono();
   app.use("/*", cors({ origin: options.origin, credentials: true, allowMethods: ["GET", "POST", "OPTIONS"], allowHeaders: ["Content-Type", "Authorization"] }));
   app.use("/api/mobile/*", async (c, next) => {
@@ -131,31 +136,50 @@ export function createRobotGateway(options: SpeechOptions & {
     finally { ttsBusy.delete(id); }
   });
   app.get("/api/mobile/session", async (c) => {
-    const identity = await pairing.phone(c.req.raw.headers);
-    if (!identity) return c.json({ error: "Unauthorized" }, 401);
+    const authenticated = await pairing.phoneSession(c.req.raw.headers);
+    if (!authenticated) return c.json({ error: "Unauthorized" }, 401);
     if (!options.robotOwnerId) return c.json({ error: "Robot driving authorization is not configured" }, 501);
-    if (identity.account.user.id !== options.robotOwnerId || c.req.query("device_id") !== deviceId) {
+    const { identity, session: phoneSession } = authenticated;
+    if (!driveEligible(identity.account.user.id) || c.req.query("device_id") !== deviceId) {
       return c.json({ error: "Robot is not assigned to this account" }, 403);
     }
-    const room = rooms.get(options.robotOwnerId);
+    const room = rooms.get(identity.account.user.id);
     const web = room?.get("web"), phone = room?.get("phone");
-    if (!web || !phone || phone.data.identity !== identity || !phone.data.driveBinding ||
+    if (!room || !web || !phone || phone.data.identity !== identity || !phone.data.driveBinding ||
         phone.data.driveBinding !== c.req.header("X-IRIS-Drive-Binding")) {
       return c.json({ error: "Connect a compatible phone and console" }, 409);
     }
     const binding = phone.data.driveBinding;
-    // Recheck socket ownership after the async session lookup. Either peer may have been replaced.
-    if (!await pairing.valid(web.data.identity) || !pairing.current(identity) || room?.get("web") !== web || room?.get("phone") !== phone ||
-        phone.data.driveBinding !== binding || web.readyState !== 1 || phone.readyState !== 1) {
+    const webSession = await pairing.session(web.data.identity);
+    const now = Date.now();
+    // No awaits between the ownership recheck and issuance: contenders cannot both claim the car.
+    if (!pairing.current(identity) || !pairing.current(web.data.identity) ||
+        room.get("web") !== web || room.get("phone") !== phone || phone.data.driveBinding !== binding ||
+        web.readyState !== 1 || phone.readyState !== 1) {
       return c.json({ error: "Controller disconnected" }, 409);
     }
-    const now = Date.now();
-    if (!lease || lease.expires_at_ms <= now) {
-      lease = { control_session_id: crypto.randomUUID(), signing_key: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"), expires_at_ms: 0 };
+    if (!webSession) {
+      revokeDrive(room);
+      web.close(1008, "Account session expired; sign in again");
+      return c.json({ error: "Console session expired" }, 409);
     }
-    lease.expires_at_ms = Math.min(now + 10_000, identity.expires, web.data.identity.expires);
-    const grant = { ...lease, device_id: deviceId, server_time_ms: now, max_ttl_ms: 300 };
+    if (sharedDrive && (webSession.user.role !== "patient" || phoneSession.user.role !== "patient")) {
+      revokePatientLease(phone);
+      return c.json({ error: "Patient account required to drive the robot" }, 403);
+    }
+    if (lease && lease.expires <= now) lease = undefined;
+    if (now < sharedReservedUntil || (lease && (lease.web !== web || lease.phone !== phone))) {
+      return c.json({ error: "Robot drive lease is temporarily reserved" }, 409);
+    }
+    const expires = Math.min(now + driveLeaseMs, identity.expires, web.data.identity.expires,
+      phoneSession.session.expiresAt.getTime(), webSession.session.expiresAt.getTime());
+    if (expires <= now) return c.json({ error: "Controller session expired" }, 409);
+    lease ??= { phone, web, id: crypto.randomUUID(), key: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"), expires };
+    // A shorter renewal cannot recall a longer grant already delivered to this pair.
+    lease.expires = Math.max(lease.expires, expires);
+    const grant = { control_session_id: lease.id, signing_key: lease.key, expires_at_ms: expires, device_id: deviceId, server_time_ms: now, max_ttl_ms: 300 };
     if (!send(web, { ...grant, type: "drive_grant", ts: now })) {
+      revokeDrive(room);
       web.close(1013, "Drive connection unavailable");
       return c.json({ error: "Console unavailable" }, 409);
     }
@@ -175,22 +199,33 @@ export function createRobotGateway(options: SpeechOptions & {
   });
   const revokeDrive = (room: Map<Role, Peer>) => {
     const phone = room.get("phone");
-    if (!phone || phone.data.identity.account.user.id !== options.robotOwnerId) return;
+    if (!phone) return;
     delete phone.data.driveBinding;
-    if (!lease) return;
-    const revoked = { type: "session_revoked", device_id: deviceId, control_session_id: lease.control_session_id, ts: Date.now() };
+    if (!lease || lease.phone !== phone || lease.web !== room.get("web")) return;
+    const old = lease;
     lease = undefined;
-    for (const peer of room.values()) {
+    // A disconnected controller may miss revocation. Its last signed lease still bounds handoff.
+    if (sharedDrive) sharedReservedUntil = Math.max(sharedReservedUntil, old.expires);
+    const revoked = { type: "session_revoked", device_id: deviceId, control_session_id: old.id, ts: Date.now() };
+    for (const peer of [old.web, old.phone]) {
       if (!send(peer, revoked) && peer.readyState === 1) peer.close(1013, "Drive connection unavailable");
     }
   };
   const bindDrive = (room: Map<Role, Peer>) => {
     const phone = room.get("phone");
     if (!phone?.data.driveCapable || phone.data.driveBinding || !room.has("web") ||
-        phone.data.identity.account.user.id !== options.robotOwnerId) return;
+        !driveEligible(phone.data.identity.account.user.id)) return;
     const binding = crypto.randomUUID();
     if (send(phone, { type: "drive_binding", device_id: deviceId, binding, ts: Date.now() })) phone.data.driveBinding = binding;
     else phone.close(1013, "Drive connection unavailable");
+  };
+  const revokePatientLease = (peer: Peer) => {
+    if (!lease || (lease.web !== peer && lease.phone !== peer)) return;
+    const room = roomFor(peer);
+    if (!room) return;
+    revokeDrive(room);
+    // The phone clears its binding on revocation. Rebind this still-connected pair for later polls.
+    bindDrive(room);
   };
   const presence = (room: Map<Role, Peer>) => {
     const message = { type: "peer_status", web: room.has("web"), phone: room.has("phone"), robot: false, ts: Date.now() };
@@ -204,7 +239,10 @@ export function createRobotGateway(options: SpeechOptions & {
       if (!session) {
         speech.disconnect(peer);
         peer.close(1008, "Account session expired; sign in again");
-      } else speech.checkRole(peer, session.user.role);
+      } else {
+        speech.checkRole(peer, session.user.role);
+        if (sharedDrive && session.user.role !== "patient") revokePatientLease(peer);
+      }
     }
     catch { peer.close(1011, "Account validation unavailable"); }
     finally { peer.data.checking = false; }

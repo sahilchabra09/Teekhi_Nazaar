@@ -67,11 +67,17 @@ export class Pairing {
     this.devices.set(credential, identity);
     return { token, expires_at_ms: identity.expires, user: identity.account.user };
   }
-  async phone(headers: Headers) {
+  async phoneSession(headers: Headers) {
     const raw = headers.get("authorization") ?? "";
     if (!raw.startsWith("Bearer ") || raw.length > 256) return null;
     const identity = this.devices.get(hash(raw.slice(7)));
-    return identity && await this.valid(identity) ? identity : null;
+    if (!identity) return null;
+    const session = await this.session(identity);
+    return session && this.current(identity) ? { identity, session } : null;
+  }
+  async phone(headers: Headers) {
+    const phone = await this.phoneSession(headers);
+    return phone && this.current(phone.identity) ? phone.identity : null;
   }
   ticket(identity: Identity) {
     this.sweep();

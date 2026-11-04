@@ -7,7 +7,7 @@ const origin = "http://localhost:3001";
 const account = (id: string): AccountSession => ({ user: { id, email: `${id}@example.invalid`, name: id, role: "patient" }, session: { id: `session-${id}`, expiresAt: new Date(Date.now() + 3_600_000) } });
 const cookie = (id: string) => new Headers({ cookie: id });
 const cleanups: (() => Promise<void>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+afterEach(async () => { setSystemTime(); for (const cleanup of cleanups.splice(0)) await cleanup(); });
 async function until(check: () => boolean) {
   const end = Date.now() + 2000;
   while (!check()) { if (Date.now() > end) throw new Error("Timed out waiting for relay"); await Bun.sleep(5); }
@@ -632,6 +632,102 @@ test("drive leases require the configured owner, live signed-intent phone, paire
   nextWeb.ws.close();
   await until(() => nextPhone.messages.some(m => m.type === "session_revoked"));
   expect((await poll(alice.token, finalBinding)).status).toBe(409);
+});
+
+function drivePoll(base: string, token: string, binding: string) {
+  return fetch(base + "/api/mobile/session?device_id=esp12e_carbot", {
+    headers: { authorization: "Bearer " + token, "X-IRIS-Drive-Binding": binding },
+  });
+}
+
+async function drivePair(f: ReturnType<typeof fixture>, id: string) {
+  const {token} = await f.signIn(id);
+  const web = await f.socket("web", id), phone = await f.socket("phone", token);
+  phone.ws.send(JSON.stringify({type: "hello", drive_proof: "hmac-sha256-v1", ts: Date.now()}));
+  await until(() => phone.messages.some(m => m.type === "drive_binding"));
+  const binding = () => String(phone.messages.filter(m => m.type === "drive_binding").at(-1)!.binding);
+  return { id, web, phone, token, binding, poll: () => drivePoll(f.base, token, binding()) };
+}
+
+test("shared driving grants exactly one competing pair a private lease and hands off with fresh keys", async () => {
+  const f = fixture(true, "*");
+  const pairs = [await drivePair(f, "alice"), await drivePair(f, "bob")];
+  expect((await drivePoll(f.base, pairs[0]!.token, pairs[1]!.binding())).status).toBe(409);
+  // A fresh gateway cannot know whether its predecessor still has a live 10-second grant.
+  expect((await pairs[0]!.poll()).status).toBe(409);
+  setSystemTime(new Date(Date.now() + 10_001));
+  const responses = await Promise.all(pairs.map(p => p.poll()));
+  expect(responses.map(r => r.status).sort()).toEqual([200, 409]);
+  const won = responses.findIndex(r => r.status === 200);
+  const owner = pairs[won]!, waiting = pairs[1-won]!;
+  const grant = await responses[won]!.json() as {control_session_id:string; signing_key:string; expires_at_ms:number};
+  expect(await responses[1-won]!.json()).not.toHaveProperty("signing_key");
+  await until(() => owner.web.messages.some(m => m.type === "drive_grant"));
+  expect(owner.web.messages.find(m => m.type === "drive_grant")).toMatchObject(grant);
+  expect(waiting.web.messages.some(m => m.type === "drive_grant")).toBe(false);
+  const oldBinding = waiting.binding();
+  const otherWeb = await f.socket("web", waiting.id);
+  await until(() => waiting.binding() !== oldBinding);
+  expect((await waiting.poll()).status).toBe(409);
+  const renewed = await (await owner.poll()).json() as typeof grant;
+  expect(renewed).toMatchObject({control_session_id: grant.control_session_id, signing_key: grant.signing_key});
+  expect(owner.phone.messages.some(m => m.type === "session_revoked")).toBe(false);
+  owner.web.ws.close();
+  await until(() => owner.phone.messages.some(m => m.type === "session_revoked" && m.control_session_id === grant.control_session_id));
+  expect((await waiting.poll()).status).toBe(409);
+  try {
+    setSystemTime(new Date(renewed.expires_at_ms - 100));
+    expect((await waiting.poll()).status).toBe(409);
+    setSystemTime(new Date(renewed.expires_at_ms + 1));
+    const handoff = await waiting.poll();
+    expect(handoff.status).toBe(200);
+    const fresh = await handoff.json() as typeof grant;
+    expect(fresh.control_session_id).not.toBe(grant.control_session_id);
+    expect(fresh.signing_key).not.toBe(grant.signing_key);
+    await until(() => otherWeb.messages.some(m => m.type === "drive_grant" && m.control_session_id === fresh.control_session_id));
+  } finally { setSystemTime(); }
+});
+
+test("shared driving rechecks both patient sessions, revokes role loss and allows takeover after expiry", async () => {
+  const f = fixture(true, "*");
+  const alice = await drivePair(f, "alice"), bob = await drivePair(f, "bob");
+  setSystemTime(new Date(Date.now() + 10_001));
+  f.sessions.get("alice")!.user.role = "doctor";
+  expect((await alice.poll()).status).toBe(403);
+  f.sessions.get("alice")!.user.role = "patient";
+  f.sessions.get("mobile-alice")!.user.role = null;
+  expect((await alice.poll()).status).toBe(403);
+  f.sessions.get("mobile-alice")!.user.role = "patient";
+  const initial = await alice.poll();
+  expect(initial.status).toBe(200);
+  const grant = await initial.json() as {control_session_id:string; signing_key:string; expires_at_ms:number};
+  const mobileSession = f.sessions.get("mobile-alice")!.session;
+  const parentExpiry = mobileSession.expiresAt;
+  mobileSession.expiresAt = new Date(Date.now() + 1_000);
+  const shortened = await (await alice.poll()).json() as typeof grant;
+  expect(shortened.expires_at_ms).toBeLessThan(grant.expires_at_ms);
+  mobileSession.expiresAt = parentExpiry;
+  f.sessions.get("mobile-alice")!.user.role = "doctor";
+  await until(() => alice.web.messages.some(m => m.type === "session_revoked" && m.control_session_id === grant.control_session_id));
+  expect((await bob.poll()).status).toBe(409);
+  try {
+    setSystemTime(new Date(shortened.expires_at_ms + 1));
+    expect((await bob.poll()).status).toBe(409);
+    setSystemTime(new Date(grant.expires_at_ms + 1));
+    const bobGrant = await bob.poll();
+    expect(bobGrant.status).toBe(200);
+    const held = await bobGrant.json() as typeof grant;
+    expect(held.signing_key).not.toBe(grant.signing_key);
+    f.sessions.get("mobile-alice")!.user.role = "patient";
+    expect((await alice.poll()).status).toBe(409);
+    setSystemTime(new Date(held.expires_at_ms + 1));
+    const next = await alice.poll();
+    expect(next.status).toBe(200);
+    const rotated = await next.json() as typeof grant;
+    expect(rotated.signing_key).not.toBe(held.signing_key);
+    expect(rotated.control_session_id).not.toBe(held.control_session_id);
+    expect((await bob.poll()).status).toBe(409);
+  } finally { setSystemTime(); }
 });
 
 test("revoking a phone during an asynchronous account check invalidates the in-flight result", async () => {

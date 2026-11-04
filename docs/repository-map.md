@@ -4,7 +4,7 @@
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/web/`, `apps/server/`, `packages/` | Shared Better Auth Google sign-in, Android OAuth returns with PKCE, account-isolated media relay, care/RBAC and Talk APIs. The configured robot owner can obtain a short-lived drive grant for the paired Screen 1 console and phone. |
+| `apps/web/`, `apps/server/`, `packages/` | Shared Better Auth Google sign-in, Android OAuth returns with PKCE, account-isolated media relay, care/RBAC and Talk APIs. The configured owner, or one authenticated patient pair at a time in shared mode, can obtain a short-lived drive grant. |
 | `apps/mobile/` | Native IRIS Android companion with the frontend's clay styling, shared account sign-in, secure credential storage, Kotlin protocol/audio/controller core and device checklist. The development mock is an isolated protocol-test fixture. |
 | `bot/src/main.cpp` | ESP-12E firmware for motor/servo control and Wi-Fi provisioning, without IR sensors. |
 | `iot/` | Separate ESP8266 appliance firmware, three switched outputs and retained MQTT state. See [wiring and setup](../iot/README.md). |

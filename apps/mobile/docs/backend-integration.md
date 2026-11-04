@@ -41,9 +41,9 @@ Relay phone `rtc_offer`, `rtc_ice`, `frame`, `speech_activity`, `tts_status`, fa
 
 The phone always offers, including after hub reconnect. Relay web `media_ready` to the phone for a fresh offer after the console's listeners are installed. Legacy peer-presence startup remains supported. The web client must receive `peer_status.phone:false` on disconnect so its hook can release stale media. Only the web user confirmation flow may create `speak`; the mobile app does not choose replies.
 
-## Owner-authorized driving
+## Authorized driving
 
-On the API server, set `IRIS_ROBOT_OWNER_ID` to the permitted user's **Better Auth user ID** and restart the single server process. An empty value disables all drive grants. The assignment applies only to `esp12e_carbot`.
+Use `IRIS_ROBOT_OWNER_ID="*"` for shared patient access or set the permitted user’s Better Auth ID for single-owner access. An empty value disables grants. Shared access still requires a signed-in patient with a compatible phone and web console in the same account. The API allows one live controller pair for `esp12e_carbot`, responds with HTTP 409 while the car is reserved, and issues a new session and secret on handoff.
 
 1. The owner opens the console and connects a phone signed into the same account. The phone's authenticated WebSocket sends `hello` with `drive_proof: "hmac-sha256-v1"`. When both peers are present, the server privately sends the phone `{type:"drive_binding",device_id,binding,ts}`.
 2. **Fetch session** starts a poll every 2.5 seconds. The phone calls `GET /api/mobile/session?device_id=esp12e_carbot` with its bearer credential and the private `X-IRIS-Drive-Binding` header. Each poll verifies both peer identities and the current pair.
@@ -106,7 +106,7 @@ Use the main authenticated console at `/` for integration checks. Only one conso
 
 ## Android command translation
 
-On `teekhi-nazaar/esp12e_carbot/intent`, send the usual signed `drive_intent` JSON envelope. The `action` field accepts `F`, `B`, `L`, `R`, `U`, `D`, and `S`, or the corresponding lowercase words. Sign the action exactly as sent. Existing session, sequence, speed (0–100), freshness, and explicit Enable requirements apply. Zero speed or S disarms. Renew held intentions at 100 ms intervals.
+On `teekhi-nazaar/esp12e_carbot/intent`, send the usual signed `drive_intent` JSON envelope. The `action` field accepts `F`, `B`, `L`, `R`, `U`, `D`, and `S`, or the corresponding lowercase words. Sign the action exactly as sent. Existing session, sequence, speed (0–100), freshness, and explicit Enable requirements apply. On phones advertising `supports_neutral: true`, the signed word `neutral` with speed 0 stops the wheels and preserves a healthy enabled session. The phone acknowledges with `ready` and the same `last_command_id`. S, `stop`, and zero speed on other actions disarm. Renew held movement intentions at 100 ms intervals.
 
 F/B hold the heading measured at direction entry. L/R pivot with yaw-rate correction. The mounted Android phone samples the rotation vector and projects its gyroscope onto the vertical axis. Hold the mount upright and still for about 1–2 seconds before calibration. The phone averages 24 fresh orientation samples around the circle, smooths relative angles, and passes signed integer wheel efforts in the ESP's phone-control envelope on `carbot/command`.
 
