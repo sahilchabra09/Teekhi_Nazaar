@@ -106,8 +106,9 @@ const STEP_HELP: readonly string[] = [
   "Check your gaze, validate accuracy, recalibrate, or export a result.",
 ]
 export function EyeTrackingWorkspace({
-  onSample, onUse, onClose, controlling, onSetupRequired,
+  onSample, onUse, onPreview, onClose, mode, onSetupRequired,
 }: EyeTrackingWorkspaceProps) {
+  const dashboardOpen = mode !== "setup"
   const steps = STEPS
   const stepHelp = STEP_HELP
   const [diagnostics] = useState(() => new CalibrationDiagnostics())
@@ -212,11 +213,11 @@ export function EyeTrackingWorkspace({
   }, [diagnostics, geometry])
   useEffect(() => {
     setPreviewMasksEnabled(
-      !controlling && !!source &&
+      !dashboardOpen && !!source &&
         (thresholdViewOpen || (pipelineOpen && step >= 2))
     )
   }, [
-    controlling,
+    dashboardOpen,
     pipelineOpen,
     setPreviewMasksEnabled,
     source,
@@ -355,24 +356,24 @@ export function EyeTrackingWorkspace({
   const verified = !!calibration && validation !== null && settings.locked && !!source &&
     tracker.connection === "live" && source.kind !== "sample" && source.kind !== "video" &&
     !capture && !fitting && step === 5
-  const showHandoff = step === 5 && !capture && !focus && !controlling
+  const showHandoff = step === 5 && !capture && !focus && !dashboardOpen
   const canContinueWithGaze = showHandoff && verified
   const dashboard = useDwell(onUse, { disabled: !canContinueWithGaze })
   useEffect(() => {
     if (showHandoff) dashboard.ref.current?.focus()
   }, [showHandoff, dashboard.ref])
   useEffect(() => {
-    if (controlling && !verified) onSetupRequired()
-  }, [controlling, verified, onSetupRequired])
+    if ((mode === "live" && !verified) || (mode === "preview" && (!source || !calibration))) onSetupRequired()
+  }, [mode, verified, source, calibration, onSetupRequired])
   const x = screenPoint?.[0], y = screenPoint?.[1]
   useEffect(() => {
     const time = gazeReading.timestamp
-    if (verified && gazeReading.status === "tracking" && onscreen && x !== undefined && y !== undefined && time !== undefined) {
+    if ((verified || mode === "preview") && gazeReading.status === "tracking" && onscreen && x !== undefined && y !== undefined && time !== undefined) {
       onSample({ x, y, time })
     } else {
       onSample(null)
     }
-  }, [verified, gazeReading.status, gazeReading.timestamp, onscreen, x, y, onSample])
+  }, [mode, verified, gazeReading.status, gazeReading.timestamp, onscreen, x, y, onSample])
   const allowed = [
     true,
     !!source,
@@ -699,7 +700,7 @@ export function EyeTrackingWorkspace({
   }
   // The camera, worker and calibration belong to this workspace. Only its
   // setup views are removed while the dashboard consumes measured frames.
-  if (controlling) return null
+  if (dashboardOpen) return null
 
   return (
     <main
@@ -712,30 +713,39 @@ export function EyeTrackingWorkspace({
           <p className="text-xs font-semibold text-pine-soft">Patient dashboard</p>
           <h1 className="font-display text-2xl font-bold leading-tight sm:text-3xl">Eye tracking setup</h1>
         </div>
-        <button type="button" aria-label={verified ? "Stop tracking" : "Close tracker"} className={`eye-button secondary ${EyeButtonStyles}`} onClick={onClose}>{verified ? "Stop tracking" : "Close"}</button>
+        <button type="button" aria-label={source ? "Stop tracking and close" : "Close tracker"} className={`eye-button secondary ${EyeButtonStyles}`} onClick={onClose}>{source ? "Stop tracking and close" : "Close"}</button>
       </header>
       {showHandoff && (
         <section aria-labelledby="dashboard-handoff-title" className="mx-auto w-full max-w-6xl px-4 pb-5 sm:px-8">
           <div className="clay flex flex-col gap-4 rounded-3xl bg-surface p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
             <div>
               <h2 id="dashboard-handoff-title" className="font-display text-2xl font-bold">
-                {verified ? "Your gaze is ready" : "Gaze control is off"}
+                {verified ? "Your gaze is ready" : "Gaze preview only"}
               </h2>
-              <p className="mt-1 text-pine-soft">
+              <p id="dashboard-handoff-description" className="mt-1 text-pine-soft">
                 {verified
                   ? "Look at the button for a moment, or click it to open your dashboard."
-                  : "You can open the dashboard with touch or a mouse. To use gaze, complete the accuracy check with a live eye camera."}
+                  : source?.kind === "sample" || source?.kind === "video"
+                    ? "Preview the cursor with this source. To select with gaze, connect a live eye camera and pass the accuracy check."
+                    : "Your eye camera stays on in preview. Use touch or a mouse to select, or check accuracy to turn on gaze selection."}
               </p>
             </div>
+            {!verified && source?.kind !== "sample" && source?.kind !== "video" && (
+              <button type="button" className={`eye-button secondary ${EyeButtonStyles}`}
+                disabled={!usable || !calibration} onClick={() => setCapture("validation")}>
+                Check gaze accuracy
+              </button>
+            )}
             <button
               type="button"
+              aria-describedby="dashboard-handoff-description"
               ref={dashboard.ref}
-              {...(canContinueWithGaze ? dashboard.props : { onClick: onClose })}
+              {...(canContinueWithGaze ? dashboard.props : { onClick: onPreview })}
               data-gaze-continue={canContinueWithGaze ? "" : undefined}
               className="relative flex min-h-16 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-2xl bg-pine px-6 text-lg font-bold text-white"
             >
               <span className="dwell-fill" />
-              <span className="relative">Continue to dashboard</span>
+              <span className="relative">{verified ? "Continue to dashboard" : "Open dashboard in preview"}</span>
               <ArrowRight className="relative size-5" aria-hidden="true" />
             </button>
           </div>

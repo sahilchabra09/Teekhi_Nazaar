@@ -1,6 +1,7 @@
 export type EyeTrackingWorkspaceProps = {
   onSample(sample: { x: number; y: number; time: number } | null): void
-  controlling: boolean
+  mode: "setup" | "preview" | "live"
+  onPreview(): void
   onSetupRequired(): void
   onUse(): void
   onClose(): void

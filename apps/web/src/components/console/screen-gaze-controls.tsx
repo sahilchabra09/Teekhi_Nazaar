@@ -12,7 +12,7 @@ const Workspace = dynamic(() => import("@/lib/gaze/screens/eye-tracking-workspac
   loading: () => <p className="p-5" role="status">Opening eye tracker…</p>,
 });
 
-export type PatientMode = "welcome" | "setup" | "live" | "manual";
+export type PatientMode = "welcome" | "setup" | "live" | "preview" | "manual";
 
 function hasOpenDialog() {
   return Array.from(document.querySelectorAll('dialog[open], [aria-modal="true"]')).some(
@@ -31,6 +31,7 @@ export function ScreenGazeControls({ mode, setMode }: {
   const onSample = useCallback((sample: ScreenSample | null) => { latest.current = sample; }, []);
   const openSetup = useCallback(() => setMode("setup"), [setMode]);
   const close = useCallback(() => setMode("manual"), [setMode]);
+  const preview = useCallback(() => setMode("preview"), [setMode]);
   const useTracking = useCallback(() => setMode("live"), [setMode]);
   const setup = useDwell(openSetup);
   const [dwell] = useState(() => new ScreenDwell());
@@ -38,7 +39,7 @@ export function ScreenGazeControls({ mode, setMode }: {
   useEffect(() => {
     if (mode === "setup") dialog.current?.showModal();
     else dialog.current?.close();
-    if (mode !== "live" && mode !== "setup") return;
+    if (mode === "manual" || mode === "welcome") return;
 
     const point = cursor.current;
     let raf = 0;
@@ -73,10 +74,12 @@ export function ScreenGazeControls({ mode, setMode }: {
           point.style.left = x + "px";
           point.style.top = y + "px";
         }
-        // Only the validated handoff button accepts gaze inside setup.
-        const selector = mode === "setup" ? "[data-gaze-continue]" : "[data-gaze-target]";
-        const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>(selector);
-        dwell.update(hit && !hit.matches(":disabled,[aria-disabled=true]") ? hit : null, x, y, sample.time);
+        // Preview only draws the cursor. Only a verified gaze can enter or activate a target.
+        if (mode !== "preview") {
+          const selector = mode === "setup" ? "[data-gaze-continue]" : "[data-gaze-target]";
+          const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>(selector);
+          dwell.update(hit && !hit.matches(":disabled,[aria-disabled=true]") ? hit : null, x, y, sample.time);
+        }
       } else {
         hide();
       }
@@ -98,22 +101,24 @@ export function ScreenGazeControls({ mode, setMode }: {
   }, [mode, dwell]);
 
   const active = mode === "live";
+  const dashboardCursor = active || mode === "preview";
   return <>
     <span role="status" className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-pine-soft">
       <span aria-hidden className={`size-2 rounded-full ${active && tracking ? "bg-teal" : "bg-pine/30"}`} />
-      {active ? tracking ? "Gaze active" : "Finding gaze" : "Gaze off"}
+      {mode === "preview" ? tracking ? "Gaze preview · selection off" : "Finding gaze · preview only"
+        : active ? tracking ? "Gaze active" : "Finding gaze" : "Gaze off"}
     </span>
     <button ref={setup.ref} {...setup.props} type="button" aria-haspopup="dialog" aria-expanded={mode === "setup"}
       className="patient-tool">
       <span className="dwell-fill" /><ScanEye aria-hidden className="relative size-5" /><span className="relative">Setup</span>
     </button>
-    {(active || mode === "setup") && createPortal(<>
+    {(dashboardCursor || mode === "setup") && createPortal(<>
       <dialog ref={dialog} aria-label="Screen 1 eye tracking" onCancel={close}
         style={{ position: "fixed", inset: 0, width: "100vw", height: "100dvh", maxWidth: "none",
           maxHeight: "none", margin: 0, padding: 0, border: 0 }}>
-        <Workspace controlling={active} onSetupRequired={openSetup} onSample={onSample} onUse={useTracking} onClose={close}/>
+        <Workspace mode={mode} onSetupRequired={openSetup} onSample={onSample} onUse={useTracking} onPreview={preview} onClose={close}/>
       </dialog>
-      {active && <div hidden aria-hidden ref={cursor} className="pointer-events-none fixed z-50 size-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-teal bg-white/40 shadow-sm" />}
+      {dashboardCursor && <div hidden aria-hidden ref={cursor} className="pointer-events-none fixed z-50 size-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-teal bg-white/40 shadow-sm" />}
     </>, document.body)}
   </>;
 }
