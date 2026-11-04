@@ -6,7 +6,7 @@ import { Pairing, type Identity, type SessionResolver } from "./pairing";
 import { MobileOAuth, appCallback } from "./oauth";
 
 type Role = "web" | "phone";
-interface PeerData { role: Role; identity: Identity; check?: ReturnType<typeof setInterval>; checking?: boolean; window: number; messages: number }
+interface PeerData { role: Role; identity: Identity; driveCapable?: boolean; driveBinding?: string; check?: ReturnType<typeof setInterval>; checking?: boolean; window: number; messages: number }
 type Peer = ServerWebSocket<PeerData>;
 type Message = Record<string, unknown> & { type: string };
 
@@ -16,12 +16,15 @@ export function createRobotGateway(options: {
   authHandler: (request: Request) => Promise<Response>;
   authBaseUrl: string;
   googleEnabled: boolean;
+  robotOwnerId?: string;
   validationIntervalMs?: number;
 }) {
   const pairing = new Pairing(options.resolve);
   const oauth = new MobileOAuth(pairing);
   const authBase = new URL(options.authBaseUrl).origin;
   const rooms = new Map<string, Map<Role, Peer>>();
+  const deviceId = "esp12e_carbot";
+  let lease: { control_session_id: string; signing_key: string; expires_at_ms: number } | undefined;
   const app = new Hono();
   app.use("/*", cors({ origin: options.origin, credentials: true, allowMethods: ["GET", "POST", "OPTIONS"], allowHeaders: ["Content-Type", "Authorization"] }));
   app.use("/api/mobile/*", async (c, next) => {
@@ -108,11 +111,36 @@ export function createRobotGateway(options: {
     }
     return c.json({ ok: true });
   });
-  // Account pairing authorizes media, not motors. Hardware ownership and MQTT grants
-  // must be implemented before the existing guarded driving controller can enable.
   app.get("/api/mobile/session", async (c) => {
-    if (!await pairing.phone(c.req.raw.headers)) return c.json({ error: "Unauthorized" }, 401);
-    return c.json({ error: "Robot driving authorization is not configured" }, 501);
+    const identity = await pairing.phone(c.req.raw.headers);
+    if (!identity) return c.json({ error: "Unauthorized" }, 401);
+    if (!options.robotOwnerId) return c.json({ error: "Robot driving authorization is not configured" }, 501);
+    if (identity.account.user.id !== options.robotOwnerId || c.req.query("device_id") !== deviceId) {
+      return c.json({ error: "Robot is not assigned to this account" }, 403);
+    }
+    const room = rooms.get(options.robotOwnerId);
+    const web = room?.get("web"), phone = room?.get("phone");
+    if (!web || !phone || phone.data.identity !== identity || !phone.data.driveBinding ||
+        phone.data.driveBinding !== c.req.header("X-IRIS-Drive-Binding")) {
+      return c.json({ error: "Connect a compatible phone and console" }, 409);
+    }
+    const binding = phone.data.driveBinding;
+    // Recheck socket ownership after the async session lookup. Either peer may have been replaced.
+    if (!await pairing.valid(web.data.identity) || !pairing.current(identity) || room?.get("web") !== web || room?.get("phone") !== phone ||
+        phone.data.driveBinding !== binding || web.readyState !== 1 || phone.readyState !== 1) {
+      return c.json({ error: "Controller disconnected" }, 409);
+    }
+    const now = Date.now();
+    if (!lease || lease.expires_at_ms <= now) {
+      lease = { control_session_id: crypto.randomUUID(), signing_key: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"), expires_at_ms: 0 };
+    }
+    lease.expires_at_ms = Math.min(now + 10_000, identity.expires, web.data.identity.expires);
+    const grant = { ...lease, device_id: deviceId, server_time_ms: now, max_ttl_ms: 300 };
+    if (!send(web, { ...grant, type: "drive_grant", ts: now })) {
+      web.close(1013, "Drive connection unavailable");
+      return c.json({ error: "Console unavailable" }, 409);
+    }
+    return c.json(grant);
   });
   app.post("/api/utterance", async (c) => {
     if (!await pairing.phone(c.req.raw.headers)) return c.json({ error: "Unauthorized" }, 401);
@@ -122,7 +150,26 @@ export function createRobotGateway(options: {
   });
   const roomFor = (peer: Peer) => rooms.get(peer.data.identity.account.user.id);
   const send = (peer: Peer | undefined, message: Message) => {
-    if (peer && peer.readyState === 1 && peer.getBufferedAmount() < 2_000_000) peer.send(JSON.stringify(message));
+    return !!peer && peer.readyState === 1 && peer.getBufferedAmount() < 2_000_000 && peer.send(JSON.stringify(message)) !== 0;
+  };
+  const revokeDrive = (room: Map<Role, Peer>) => {
+    const phone = room.get("phone");
+    if (!phone || phone.data.identity.account.user.id !== options.robotOwnerId) return;
+    delete phone.data.driveBinding;
+    if (!lease) return;
+    const revoked = { type: "session_revoked", device_id: deviceId, control_session_id: lease.control_session_id, ts: Date.now() };
+    lease = undefined;
+    for (const peer of room.values()) {
+      if (!send(peer, revoked) && peer.readyState === 1) peer.close(1013, "Drive connection unavailable");
+    }
+  };
+  const bindDrive = (room: Map<Role, Peer>) => {
+    const phone = room.get("phone");
+    if (!phone?.data.driveCapable || phone.data.driveBinding || !room.has("web") ||
+        phone.data.identity.account.user.id !== options.robotOwnerId) return;
+    const binding = crypto.randomUUID();
+    if (send(phone, { type: "drive_binding", device_id: deviceId, binding, ts: Date.now() })) phone.data.driveBinding = binding;
+    else phone.close(1013, "Drive connection unavailable");
   };
   const presence = (room: Map<Role, Peer>) => {
     const message = { type: "peer_status", web: room.has("web"), phone: room.has("phone"), robot: false, ts: Date.now() };
@@ -157,15 +204,18 @@ export function createRobotGateway(options: {
         const room = rooms.get(id) ?? new Map<Role, Peer>();
         rooms.set(id, room);
         const previous = room.get(peer.data.role);
+        if (previous) revokeDrive(room);
         room.set(peer.data.role, peer);
         previous?.close(4001, "Connected on another device");
         presence(room);
+        bindDrive(room);
         peer.data.check = setInterval(() => void validate(peer), options.validationIntervalMs ?? 15_000);
       },
       close(peer: Peer) {
         clearInterval(peer.data.check);
         const room = roomFor(peer);
         if (room?.get(peer.data.role) !== peer) return;
+        revokeDrive(room);
         room.delete(peer.data.role); presence(room);
         if (!room.size) rooms.delete(peer.data.identity.account.user.id);
       },
@@ -179,6 +229,10 @@ export function createRobotGateway(options: {
           const message = JSON.parse(String(raw)) as Message;
           if (!message || typeof message.type !== "string" || !Number.isFinite(message.ts)) return;
           const role = peer.data.role;
+          if (role === "phone" && message.type === "hello" && message.drive_proof === "hmac-sha256-v1") {
+            peer.data.driveCapable = true;
+            bindDrive(room);
+          }
           // Never route an MQTT drive intention or trust account IDs supplied in a message.
           if (role === "web" && ["media_ready", "rtc_answer", "rtc_ice", "stop"].includes(message.type)) send(room.get("phone"), message);
           if (role === "web" && message.type === "speak" && typeof message.text === "string" && message.text.trim() && message.text.length <= 4000 &&

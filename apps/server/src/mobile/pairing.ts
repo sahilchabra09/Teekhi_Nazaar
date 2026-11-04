@@ -34,11 +34,13 @@ export class Pairing {
     if (!account || account.session.expiresAt.getTime() <= this.now()) return null;
     return { account, headers: sessionHeaders, expires: account.session.expiresAt.getTime() };
   }
+  current(identity: Identity): boolean {
+    return identity.expires > this.now() && (!identity.credential || this.devices.get(identity.credential) === identity);
+  }
   async valid(identity: Identity): Promise<boolean> {
-    if (identity.expires <= this.now()) return false;
-    if (identity.credential && this.devices.get(identity.credential) !== identity) return false;
+    if (!this.current(identity)) return false;
     const current = await this.resolve(identity.headers);
-    return !!current && current.session.expiresAt.getTime() > this.now() && current.user.id === identity.account.user.id && current.session.id === identity.account.session.id;
+    return this.current(identity) && !!current && current.session.expiresAt.getTime() > this.now() && current.user.id === identity.account.user.id && current.session.id === identity.account.session.id;
   }
   allowAttempt(ip: string) {
     this.sweep();

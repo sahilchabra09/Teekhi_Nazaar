@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { createRobotGateway } from "../src/mobile/gateway";
 import { Pairing, type AccountSession } from "../src/mobile/pairing";
 import { MobileOAuth, pkceChallenge } from "../src/mobile/oauth";
@@ -12,11 +12,11 @@ async function until(check: () => boolean) {
   const end = Date.now() + 2000;
   while (!check()) { if (Date.now() > end) throw new Error("Timed out waiting for relay"); await Bun.sleep(5); }
 }
-function fixture(googleEnabled = true) {
+function fixture(googleEnabled = true, robotOwnerId?: string) {
   const sessions = new Map(["alice", "bob"].map((id) => [id, account(id)]));
   for (const id of ["alice", "bob"]) sessions.set(`mobile-${id}`, { ...account(id), session: { ...account(id).session, id: `mobile-session-${id}` } });
   const callbacks = new Map<string, URL>();
-  const server = Bun.serve({ ...createRobotGateway({ origin, validationIntervalMs: 20,
+  const server = Bun.serve({ ...createRobotGateway({ origin, robotOwnerId, validationIntervalMs: 20,
     authBaseUrl: "http://localhost:3000", googleEnabled,
     resolve: async (headers) => sessions.get(headers.get("cookie") ?? "") ?? null,
     authHandler: async (request) => {
@@ -231,4 +231,79 @@ test("concurrent PKCE exchanges cannot issue two phone credentials", async () =>
   const code = new URL(result).searchParams.get("code");
   const results = await Promise.all([oauth.exchange(code, verifier), oauth.exchange(code, verifier)]);
   expect(results.filter(Boolean)).toHaveLength(1);
+});
+
+test("drive leases require the configured owner, live signed-intent phone, paired console and socket binding", async () => {
+  const f = fixture(true, "alice");
+  const alice = await f.signIn("alice"), bob = await f.signIn("bob");
+  const poll = (token: string, binding = "", device = "esp12e_carbot") => fetch(
+    f.base + "/api/mobile/session?device_id=" + device,
+    { headers: { authorization: "Bearer " + token, "X-IRIS-Drive-Binding": binding } },
+  );
+  const web = await f.socket("web", "alice"), phone = await f.socket("phone", alice.token);
+  const otherWeb = await f.socket("web", "bob"), otherPhone = await f.socket("phone", bob.token);
+  const hello = JSON.stringify({ type: "hello", drive_proof: "hmac-sha256-v1", ts: Date.now() });
+  otherPhone.ws.send(hello);
+  expect((await poll(bob.token)).status).toBe(403);
+  expect((await poll(alice.token)).status).toBe(409);
+  phone.ws.send(hello);
+  await until(() => phone.messages.some(m => m.type === "drive_binding"));
+  const binding = String(phone.messages.find(m => m.type === "drive_binding")!.binding);
+  expect((await poll(alice.token, "unbound")).status).toBe(409);
+  expect((await poll(alice.token, binding, "other")).status).toBe(403);
+  const response = await poll(alice.token, binding);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const grant = await response.json() as { control_session_id: string; signing_key: string; server_time_ms: number; expires_at_ms: number };
+  expect(grant.signing_key).toMatch(/^[0-9a-f]{64}$/);
+  expect(grant.expires_at_ms - grant.server_time_ms).toBe(10_000);
+  await until(() => web.messages.some(m => m.type === "drive_grant"));
+  expect(web.messages.find(m => m.type === "drive_grant")).toMatchObject({ ...grant, max_ttl_ms: 300 });
+  expect(otherWeb.messages.some(m => m.type === "drive_grant")).toBe(false);
+  expect(otherPhone.messages.some(m => m.type === "drive_binding")).toBe(false);
+  expect(web.messages.some(m => m.type === "drive_binding")).toBe(false);
+  expect(await (await poll(alice.token, binding)).json()).toMatchObject({ control_session_id: grant.control_session_id, signing_key: grant.signing_key });
+
+  let active = grant;
+  try {
+    setSystemTime(new Date(grant.expires_at_ms + 100));
+    const expired = await poll(alice.token, binding);
+    expect(expired.status).toBe(200);
+    active = await expired.json() as typeof grant;
+    expect(active.control_session_id).not.toBe(grant.control_session_id);
+    expect(active.signing_key).not.toBe(grant.signing_key);
+  } finally { setSystemTime(); }
+
+  const nextWeb = await f.socket("web", "alice");
+  await until(() => phone.messages.some(m => m.type === "session_revoked" && m.control_session_id === active.control_session_id));
+  expect((await poll(alice.token, binding)).status).toBe(409);
+  const nextBinding = String(phone.messages.filter(m => m.type === "drive_binding").at(-1)!.binding);
+  const nextGrant = await (await poll(alice.token, nextBinding)).json() as typeof grant;
+  expect(nextGrant.control_session_id).not.toBe(active.control_session_id);
+  expect(nextGrant.signing_key).not.toBe(active.signing_key);
+  const nextPhone = await f.socket("phone", alice.token);
+  await until(() => nextWeb.messages.some(m => m.type === "session_revoked" && m.control_session_id === nextGrant.control_session_id));
+  expect((await poll(alice.token, nextBinding)).status).toBe(409);
+  nextPhone.ws.send(hello);
+  await until(() => nextPhone.messages.some(m => m.type === "drive_binding"));
+  const finalBinding = String(nextPhone.messages.find(m => m.type === "drive_binding")!.binding);
+  expect((await poll(alice.token, finalBinding)).status).toBe(200);
+  nextWeb.ws.close();
+  await until(() => nextPhone.messages.some(m => m.type === "session_revoked"));
+  expect((await poll(alice.token, finalBinding)).status).toBe(409);
+});
+
+test("revoking a phone during an asynchronous account check invalidates the in-flight result", async () => {
+  const checked = Promise.withResolvers<AccountSession | null>();
+  const pairing = new Pairing(() => checked.promise);
+  const identity = { account: account("alice"), headers: cookie("alice"), expires: Date.now() + 60_000 };
+  const credential = pairing.issue(identity);
+  const headers = new Headers({ authorization: "Bearer " + credential.token });
+  const firstCheck = pairing.phone(headers);
+  checked.resolve(identity.account);
+  const phone = await firstCheck;
+  expect(phone).not.toBeNull();
+  const outstanding = pairing.valid(phone!);
+  pairing.revoke(phone!);
+  expect(await outstanding).toBe(false);
 });
