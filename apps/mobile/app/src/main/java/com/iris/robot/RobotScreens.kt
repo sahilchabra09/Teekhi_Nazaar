@@ -89,7 +89,7 @@ import androidx.compose.ui.viewinterop.AndroidView
                     }
                     IrisSymbol(Symbol.Chevron, Modifier.size(18.dp), Clay.Soft)
                 }
-                if (signedIn) Text("Your camera and microphone turn on when the session starts.", style = MaterialTheme.typography.bodySmall,
+                if (signedIn) Text("Your camera and microphone turn on when the session starts. Audio streams to Deepgram for speech recognition.", style = MaterialTheme.typography.bodySmall,
                     color = Clay.Soft, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 12.dp))
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -221,7 +221,7 @@ import androidx.compose.ui.viewinterop.AndroidView
         if (state.error != null) TextButton(onClick = openSettings, modifier = Modifier.fillMaxWidth()) { Text("View session notice", color = Clay.Tomato) }
         Text(if (state.speaking) "Listening pauses while IRIS speaks."
             else if (state.listening == "Processing speech") "Processing your speech..."
-            else "Speak naturally. IRIS detects speech and sends it after you pause.",
+            else "Speak naturally. Deepgram listens during the session and detects when you pause.",
             style = MaterialTheme.typography.bodyMedium, color = Clay.Soft,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(12.dp))
 }

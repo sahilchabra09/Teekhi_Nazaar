@@ -11,8 +11,8 @@ android {
         applicationId = "com.iris.robot"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.6.4"
+        versionCode = 11
+        versionName = "0.7.0"
     }
     buildFeatures { compose = true }
     compileOptions {
@@ -36,6 +36,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.getstream:stream-webrtc-android:1.3.10")
-    implementation("com.github.gkonovalov.android-vad:silero:2.0.10")
     implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
 }

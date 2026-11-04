@@ -5,15 +5,12 @@ import android.content.Context
 import android.media.*
 import android.os.SystemClock
 import com.iris.robot.core.*
-import com.konovalov.vad.silero.VadSilero
-import com.konovalov.vad.silero.config.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
-import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -34,13 +31,6 @@ class Listener(
     private val samples = Channel<Samples>(8)
     private val resampler = PcmResampler()
     private val pending = ByteArrayOutputStream()
-    private var vad: VadSilero? = null
-    private var segmenter = UtteranceSegmenter(
-        { active -> send(SpeechActivity(active)); status(if (active) "Someone is speaking" else "Listening", active) },
-        ::upload, automatic = true, empty = { if (requestId.isNotBlank()) send(SpeechState("no_speech", requestId)); requestId = "" }, minimumSpeechMs = 480,
-    )
-    private var requestId = ""
-    private var captureTimeout: Job? = null
     @Volatile private var pausedUntil = 0L
     @Volatile private var enabled = true
     @Volatile private var processing = false
@@ -54,10 +44,20 @@ class Listener(
     private val appContext = context.applicationContext
     private val uploads = kotlinx.coroutines.sync.Semaphore(2)
 
+    private val cloud = CloudSpeech(address, accountToken, scope, { value ->
+        val active = value == "listening"
+        status(when (value) {
+            "processing" -> "Processing speech"
+            "reconnecting" -> "Reconnecting speech"
+            "failed" -> "Speech failed"
+            else -> if (active) "Someone is speaking" else "Listening"
+        }, active)
+        if (value == "failed") error("Speech processing failed. Check the server connection.")
+    }, error, unauthorized)
+
     init {
         audioScope.launch {
             try {
-                vad = VadSilero(appContext, SampleRate.SAMPLE_RATE_16K, FrameSize.FRAME_SIZE_512, Mode.NORMAL)
                 status("Listening", false)
                 for (chunk in samples) {
                     if (closed) break
@@ -69,7 +69,7 @@ class Listener(
                     while (offset + 1024 <= bytes.size) {
                         if (chunk.epoch != epoch || SystemClock.elapsedRealtime() < pausedUntil) break
                         val frame = bytes.copyOfRange(offset, offset + 1024)
-                        segmenter.frame(frame, vad!!.isSpeech(frame))
+                        cloud.audio(frame)
                         offset += 1024
                     }
                     pending.reset()
@@ -77,7 +77,7 @@ class Listener(
                 }
             } catch (e: Exception) {
                 if (!closed) error("Speech detection is unavailable. Restart the session and check microphone permission.")
-            } finally { vad?.close(); vad = null }
+            }
         }
     }
     fun onMicSamples(bytes: ByteArray, rate: Int, channels: Int) {
@@ -88,51 +88,23 @@ class Listener(
             }
         }
     }
-    fun setEnabled(value: Boolean) { enabled = value; resetAudio() }
-    fun pause() { pausedUntil = Long.MAX_VALUE; resetAudio(); status("Speaking; listening paused", false) }
+    fun setEnabled(value: Boolean) { enabled = value; cloud.command(if (value) "resume" else "pause"); resetAudio() }
+    fun pause() { cloud.command("pause"); pausedUntil = Long.MAX_VALUE; resetAudio(); status("Speaking; listening paused", false) }
     fun resumeAfter(delayMs: Long = 500) {
         pausedUntil = SystemClock.elapsedRealtime() + delayMs
         resetAudio()
-        scope.launch { delay(delayMs); if (!closed && enabled && !processing && SystemClock.elapsedRealtime() >= pausedUntil) status("Listening", false) }
+        scope.launch { delay(delayMs); if (!closed && enabled && !processing && SystemClock.elapsedRealtime() >= pausedUntil) { cloud.command("resume"); status("Listening", false) } }
     }
     private fun resetAudio() {
         epoch++
-        audioScope.launch { captureTimeout?.cancel(); pending.reset(); resampler.reset(); segmenter.reset(); segmenter.automatic = true }
+        audioScope.launch { pending.reset(); resampler.reset() }
     }
-    fun tap() {
-        if (closed || !enabled || processing || SystemClock.elapsedRealtime() < pausedUntil) return
-        audioScope.launch {
-            if (segmenter.automatic && !segmenter.active) {
-                captureTimeout?.cancel(); segmenter.automatic = true
-                send(SpeechState("no_speech", requestId)); status("Ready", false)
-            }
-            else if (segmenter.active) segmenter.stop()
-            else { requestId = "u_${UUID.randomUUID()}"; segmenter.toggleManual() }
-        }
-    }
+    fun tap() { /* Automatic Deepgram endpointing needs no recording button. */ }
     fun capture(action: String, id: String) {
-        if (closed || !enabled || processing || SystemClock.elapsedRealtime() < pausedUntil) return
-        audioScope.launch {
-            when (action) {
-                "start" -> {
-                    segmenter.reset(); requestId = id; segmenter.automatic = true
-                    status("Waiting for speech", true)
-                    captureTimeout?.cancel()
-                    captureTimeout = audioScope.launch {
-                        delay(15000)
-                        if (requestId == id && segmenter.automatic) {
-                            if (segmenter.active) segmenter.stop()
-                            else { segmenter.automatic = true; send(SpeechState("no_speech", id)); requestId = ""; status("Ready", false) }
-                        }
-                    }
-                }
-                "stop" -> if (requestId == id) {
-                    if (segmenter.active) segmenter.stop()
-                    else { segmenter.automatic = true; send(SpeechState("no_speech", id)); requestId = ""; status("Ready", false) }
-                }
-                "cancel" -> if (requestId == id) { captureTimeout?.cancel(); segmenter.reset(); segmenter.automatic = true; requestId = ""; status("Ready", false) }
-            }
+        if (closed || !enabled || processing || SystemClock.elapsedRealtime() < pausedUntil) {
+            send(SpeechState("failed", id)); return
         }
+        resetAudio(); cloud.command(action, id)
     }
     fun transcript(id: String, text: String, confidence: Double?) {
         submit(id, MultipartBody.Builder().setType(MultipartBody.FORM)
@@ -170,16 +142,6 @@ class Listener(
         recorder?.release(); recorder = null; recordingThread = null
         resetAudio()
     }
-    private fun upload(pcm: ByteArray) {
-        segmenter.automatic = true
-        captureTimeout?.cancel()
-        val id = requestId.ifBlank { "u_${UUID.randomUUID()}" }
-        requestId = ""
-        submit(id, MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("utterance_id", id)
-            .addFormDataPart("duration_ms", (pcm.size / 32).toString())
-            .addFormDataPart("audio", "$id.wav", Wav.encode(pcm).toRequestBody("audio/wav".toMediaType())).build())
-    }
     private fun submit(id: String, body: RequestBody) {
         if (closed || !uploads.tryAcquire()) { send(SpeechState("failed", id)); error("Audio upload busy; try again"); return }
         processing = true
@@ -205,9 +167,9 @@ class Listener(
         }
     }
     override fun close() {
-        closed = true; stopStandalone(); send(SpeechActivity(false))
+        closed = true; cloud.close(); stopStandalone(); send(SpeechActivity(false))
         samples.close(); audioScope.cancel()
-        // Coroutine finally closes Silero on its own thread before dispatcher shutdown.
+        // Stop the PCM worker before releasing its dispatcher.
         dispatcher.close(); http.dispatcher.cancelAll(); http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll()
     }
 }

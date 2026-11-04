@@ -196,7 +196,7 @@ private class RobotSession(
         rtc = RtcClient(context, listener, hub::send, { value -> change { it.copy(video = value) } },
             { track -> change { it.copy(remoteTrack = track, frontendVideoLive = false, eglContext = if (track != null) rtc.egl.eglBaseContext else null) } },
             { live -> change { it.copy(frontendVideoLive = live) } }, ::error)
-        speaker = Speaker(context, address, hub::send, {
+        speaker = Speaker(context, address, settings.accountToken, hub::send, {
             speaking = true; listener.pause(); recognizer.pause()
             change { it.copy(speaking = true, activeSpeech = false, listening = "Speaking; listening paused") }
         }, {

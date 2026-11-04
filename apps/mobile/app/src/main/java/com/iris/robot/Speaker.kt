@@ -5,15 +5,20 @@ import android.media.*
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import com.iris.robot.core.*
-import java.net.URI
-import java.util.Locale
+
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class Speaker(
     context: Context,
     private val address: HubAddress,
+    private val token: String,
     private val send: (Msg) -> Boolean,
     private val pauseListening: () -> Unit,
     private val resumeListening: () -> Unit,
@@ -27,41 +32,18 @@ class Speaker(
     private val seen = LinkedHashSet<String>()
     private var current: Speak? = null
     private var player: MediaPlayer? = null
-    private var ready = false
-    private var failed = false
-    private var closed = false
+    @Volatile private var closed = false
     private var started = false
     private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-    private var tts: TextToSpeech? = null
-
-    init {
-        manager.mode = AudioManager.MODE_IN_COMMUNICATION
-        routeSpeaker()
-        tts = TextToSpeech(context.applicationContext) { status -> main.post {
-            if (closed) return@post
-            ready = status == TextToSpeech.SUCCESS
-            if (ready) {
-                val language = tts!!.setLanguage(Locale.US)
-                ready = language != TextToSpeech.LANG_MISSING_DATA && language != TextToSpeech.LANG_NOT_SUPPORTED
-                tts!!.setAudioAttributes(attributes); tts!!.setSpeechRate(0.95f)
-            }
-            failed = !ready
-            next()
-        } }
-        tts!!.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String) { main.post { if (current?.speak_id == id) began() } }
-            override fun onDone(id: String) { main.post { if (current?.speak_id == id) finish(null) } }
-            @Deprecated("Android callback") override fun onError(id: String) { main.post { if (current?.speak_id == id) finish("Device speech failed") } }
-            override fun onError(id: String, errorCode: Int) { main.post { if (current?.speak_id == id) finish("Device speech error $errorCode") } }
-        })
-        main.postDelayed({
-            if (!closed && !ready && !failed) { failed = true; next() }
-        }, 10_000)
-    }
+    private val cache = context.cacheDir
+    private val io = Executors.newSingleThreadExecutor()
+    private val http = OkHttpClient.Builder().callTimeout(35, TimeUnit.SECONDS).readTimeout(35, TimeUnit.SECONDS).build()
+    private var audioFile: File? = null
+    init { manager.mode = AudioManager.MODE_IN_COMMUNICATION; routeSpeaker() }
     fun speak(message: Speak) {
         if (closed || message.speak_id in seen) return
-        if (message.text.isBlank() || message.text.length > 4000 || queue.size >= 24) {
+        if (message.text.isBlank() || message.text.length > 1000 || queue.size >= 24) {
             send(TtsStatus(message.speak_id, "error", "Speech text or queue limit exceeded")); return
         }
         seen.add(message.speak_id); if (seen.size > 256) seen.remove(seen.first())
@@ -69,26 +51,40 @@ class Speaker(
     }
     private fun next() {
         if (closed || current != null || queue.isEmpty()) return
-        if (!ready && !failed && queue.first().audio_url == null) return
         val message = queue.removeFirst(); current = message; started = false
         pauseListening() // before preparation/tts.speak, not after the first audio sample
         caption(message.text, true); routeSpeaker()
-        if (message.audio_url != null) {
+        io.execute {
+            var file: File? = null
             try {
-                val uri = URI(address.http + "/").resolve(message.audio_url)
-                require(uri.scheme in setOf("http", "https") && uri.userInfo == null)
-                player = MediaPlayer().apply {
-                    setAudioAttributes(attributes); setDataSource(uri.toString())
-                    setOnPreparedListener { if (!closed && current?.speak_id == message.speak_id) { it.start(); began() } }
-                    setOnCompletionListener { finish(null) }
-                    setOnErrorListener { _, _, _ -> finish("Audio URL playback failed"); true }
-                    prepareAsync()
+                val body = JSONObject().put("text", message.text).toString().toRequestBody("application/json".toMediaType())
+                http.newCall(Request.Builder().url(address.http + "/api/mobile/tts")
+                    .header("Authorization", "Bearer $token").post(body).build()).execute().use { response ->
+                    check(response.isSuccessful) { "Deepgram voice failed (HTTP ${response.code})" }
+                    val bytes = response.body?.bytes() ?: error("Empty voice response")
+                    check(bytes.size in 44..12_000_000 && String(bytes.copyOfRange(0, 4)) == "RIFF") { "Invalid voice audio" }
+                    file = File.createTempFile("iris-voice-", ".wav", cache).also { it.writeBytes(bytes) }
                 }
-                main.postDelayed({ if (current?.speak_id == message.speak_id && !started) finish("Audio preparation timed out") }, 10_000)
-            } catch (_: Exception) { finish("Invalid or unavailable audio URL") }
-        } else if (!ready) finish("Install an English text-to-speech voice in Android settings")
-        else if (tts!!.speak(message.text, TextToSpeech.QUEUE_ADD, null, message.speak_id) == TextToSpeech.ERROR) finish("Speech could not start")
-        main.postDelayed({ if (current?.speak_id == message.speak_id) { tts?.stop(); finish("Speech timed out") } }, 90_000)
+                val readyFile = file!!
+                main.post {
+                    if (closed || current?.speak_id != message.speak_id) { readyFile.delete(); return@post }
+                    audioFile = readyFile
+                    try {
+                        player = MediaPlayer().apply {
+                            setAudioAttributes(attributes); setDataSource(readyFile.absolutePath)
+                            setOnPreparedListener { if (!closed && current?.speak_id == message.speak_id) { it.start(); began() } }
+                            setOnCompletionListener { finish(null) }
+                            setOnErrorListener { _, _, _ -> finish("Deepgram audio playback failed"); true }
+                            prepareAsync()
+                        }
+                    } catch (_: Exception) { finish("Deepgram audio playback failed") }
+                }
+            } catch (e: Exception) {
+                file?.delete()
+                main.post { if (!closed && current?.speak_id == message.speak_id) finish(e.message ?: "Deepgram voice unavailable") }
+            }
+        }
+        main.postDelayed({ if (current?.speak_id == message.speak_id) finish("Speech timed out") }, 90_000)
     }
     private fun began() {
         if (closed || started) return
@@ -97,7 +93,7 @@ class Speaker(
     private fun finish(error: String?) {
         if (closed) return
         val item = current ?: return
-        player?.release(); player = null
+        player?.release(); player = null; audioFile?.delete(); audioFile = null
         send(TtsStatus(item.speak_id, if (error == null) "finished" else "error", error))
         current = null
         if (queue.isNotEmpty()) next() else { caption(item.text, false); resumeListening() }
@@ -111,7 +107,8 @@ class Speaker(
         closed = true; main.removeCallbacksAndMessages(null)
         current?.let { send(TtsStatus(it.speak_id, "error", "App stopped")) }
         queue.forEach { send(TtsStatus(it.speak_id, "error", "App stopped")) }; queue.clear()
-        tts?.stop(); tts?.shutdown(); player?.release(); player = null
+        http.dispatcher.cancelAll(); io.shutdownNow(); http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll()
+        player?.release(); player = null; audioFile?.delete(); audioFile = null
         if (Build.VERSION.SDK_INT >= 31) manager.clearCommunicationDevice() else @Suppress("DEPRECATION") run { manager.isSpeakerphoneOn = previousSpeaker }
         manager.mode = previousMode
     }
