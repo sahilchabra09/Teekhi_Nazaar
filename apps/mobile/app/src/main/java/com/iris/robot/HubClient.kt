@@ -14,7 +14,7 @@ class HubClient(
     private val onState: (Boolean, String) -> Unit,
     private val onMessage: (Msg) -> Unit,
     private val accountToken: String,
-    private val onUnauthorized: () -> Unit,
+    private val onSessionEnded: (credentialRejected: Boolean, message: String) -> Unit,
 ) : AutoCloseable {
     private val client = OkHttpClient.Builder().pingInterval(10, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
     @Volatile private var socket: WebSocket? = null
@@ -50,19 +50,27 @@ class HubClient(
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (code == 1008 || code == 4001) unauthorized(epoch) else disconnected(epoch)
+                when (code) {
+                    4001 -> endSession(epoch, false, "Another phone connected. Start IRIS to reconnect.")
+                    1008 -> endSession(epoch, false, "The server closed this session. Start IRIS to verify the account and reconnect.")
+                    else -> disconnected(epoch)
+                }
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (response?.code == 401 || response?.code == 403) unauthorized(epoch) else disconnected(epoch)
+                when (response?.code) {
+                    401 -> endSession(epoch, true, "Account authorization expired. Continue with Google again.")
+                    403 -> endSession(epoch, false, "The server refused this connection. Check your server address.")
+                    else -> disconnected(epoch) // USB/network loss: retry the same bearer
+                }
             }
         })
     }
-    private fun unauthorized(epoch: Int) {
+    private fun endSession(epoch: Int, credentialRejected: Boolean, message: String) {
         scope.launch(Dispatchers.Main.immediate) {
             if (stopped || epoch != generation) return@launch
             stopped = true; open = false; retry?.cancel()
-            onState(false, "Account link ended")
-            onUnauthorized()
+            onState(false, message)
+            onSessionEnded(credentialRejected, message)
         }
     }
     private fun disconnected(epoch: Int) {

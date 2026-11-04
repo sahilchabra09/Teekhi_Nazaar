@@ -69,6 +69,28 @@ function fixture(googleEnabled = true, robotOwnerId?: string, talkHandler?: (req
   return { server, sessions, base, api, signIn, socket, begin };
 }
 
+test("losing and replacing the phone transport preserves its original account token and expiry", async () => {
+  const f = fixture();
+  const { token } = await f.signIn("alice");
+  const me = async () => {
+    const response = await f.api("/api/mobile/me", undefined, undefined, token);
+    expect(response.status).toBe(200);
+    return await response.json() as { expires_at_ms: number; user: { id: string } };
+  };
+  const before = await me();
+  expect(before.user.id).toBe("alice");
+  expect(before.expires_at_ms).toBeGreaterThan(Date.now());
+  const first = await f.socket("phone", token);
+  first.ws.terminate();
+  await until(() => first.ws.readyState === WebSocket.CLOSED);
+  const second = await f.socket("phone", token);
+  await f.socket("phone", token);
+  await until(() => second.ws.readyState === WebSocket.CLOSED);
+  expect(await me()).toEqual(before);
+  await f.api("/api/mobile/logout", undefined, {}, token);
+  expect((await f.api("/api/mobile/me", undefined, undefined, token)).status).toBe(401);
+});
+
 test("phone audio and Android transcripts share Talk routes and return replies only to their account", async () => {
   const calls: { path: string; cookie: string; text?: string; audio?: number }[] = [];
   const f = fixture(true, undefined, async (request) => {

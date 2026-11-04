@@ -129,6 +129,7 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
                 mutable.value = RobotUiState(running = true, accountEmail = account.user.email)
                 session = RobotSession(getApplication(), verified, address,
                     { clearAccount("Your session ended. Continue with Google to sign in again.") },
+                    { message -> stop(); report(message) },
                     { transform -> mutable.update(transform) })
                 session!!.start()
             } catch (e: CancellationException) { throw e }
@@ -160,6 +161,7 @@ private class RobotSession(
     private val settings: RobotSettings,
     private val address: HubAddress,
     private val unauthorized: () -> Unit,
+    private val endSession: (String) -> Unit,
     private val update: ((RobotUiState) -> RobotUiState) -> Unit,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -186,7 +188,9 @@ private class RobotSession(
             controller.backendConnectivity(connected)
             change { it.copy(hub = connected, hubLabel = label) }
             if (!connected) { sessions?.bind(null); mqtt?.stopOutput(); rtc.peerAvailable(false); change { it.copy(web = false) } }
-        }, ::message, settings.accountToken, unauthorized)
+        }, ::message, settings.accountToken) { credentialRejected, message ->
+            if (credentialRejected) unauthorized() else endSession(message)
+        }
         listener = Listener(context, address, scope, hub::send, { label, active ->
             change { if (it.speaking || it.androidStt) it else it.copy(listening = label, activeSpeech = active) }
         }, ::error, settings.accountToken, unauthorized)
