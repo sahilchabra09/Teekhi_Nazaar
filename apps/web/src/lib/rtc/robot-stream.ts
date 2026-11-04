@@ -85,7 +85,7 @@ export class RobotStreamConnection {
       peer = new RTCPeerConnection({ iceServers: [] });
       this.peer = peer;
       this.remote = new MediaStream();
-      // Never send laptop microphone audio. Reuse the gaze module's webcam track.
+      // The browser sends only the explicitly shared local video track.
       peer.ontrack = ({ track }) => {
         if (this.peer !== peer || this.closed) return;
         if (!this.remote!.getTracks().some((existing) => existing.id === track.id)) this.remote!.addTrack(track);
@@ -110,7 +110,7 @@ export class RobotStreamConnection {
     this.serial = this.serial.catch(() => {}).then(async () => {
       if (epoch !== this.epoch || this.closed) return;
       await peer.setRemoteDescription({ type: "offer", sdp });
-      // Reserve a send direction even before gaze opens the webcam. Later webcam changes
+      // Reserve a send direction even before the patient shares a camera. Later changes
       // can replaceTrack without recreating the peer or making the browser an offerer.
       const video = peer.getTransceivers().find((item) => item.receiver.track.kind === "video");
       if (video) {
@@ -130,16 +130,21 @@ export class RobotStreamConnection {
     });
   }
 
-  setLocal(local?: MediaStream) {
-    this.local = local;
+  setLocal(local?: MediaStream): Promise<void> {
     const peer = this.peer;
-    const epoch = this.epoch;
-    if (!peer || this.closed) return;
-    this.serial = this.serial.catch(() => {}).then(async () => {
-      if (epoch !== this.epoch || this.closed) return;
-      const video = peer.getTransceivers().find((item) => item.receiver.track.kind === "video");
-      if (video) await video.sender.replaceTrack(this.local?.getVideoTracks()[0] ?? null);
-    }).catch(() => {});
+    if (!peer || this.closed) {
+      this.local = local;
+      return Promise.resolve();
+    }
+    const handoff = this.serial.then(async () => {
+      if (peer === this.peer && !this.closed) {
+        const video = peer.getTransceivers().find((item) => item.receiver.track.kind === "video");
+        if (video) await video.sender.replaceTrack(local?.getVideoTracks()[0] ?? null);
+      }
+      this.local = local;
+    });
+    this.serial = handoff.catch(() => {});
+    return handoff;
   }
 
   private candidate(raw: unknown) {

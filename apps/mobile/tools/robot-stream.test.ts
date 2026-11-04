@@ -137,3 +137,26 @@ test("phone presence requests media only after the browser listeners are install
   expect(hub.sent.at(-1)?.device_id).toBe("esp12e_carbot");
   expect(hub.handlers.get("rtc_offer")?.size).toBe(1);
 });
+
+test("a rejected webcam replacement preserves the previous sender for a new offer and allows a retry", async () => {
+  const hub = new FakeHub();
+  const local = (id: string) => {
+    const stream = new FakeStream();
+    stream.addTrack({ id, kind: "video" } as MediaStreamTrack);
+    return stream as unknown as MediaStream;
+  };
+  const old = local("front");
+  const next = local("usb");
+  const connection = new RobotStreamConnection(hub, () => {}, old);
+  connections.push(connection);
+  hub.emit({ type: "rtc_offer", sdp: "first" });
+  await settle();
+  FakePeer.instances[0]!.videoTransceiver.sender.replaceTrack = async () => { throw new Error("sender refused"); };
+  await expect(Promise.resolve(connection.setLocal(next))).rejects.toThrow("sender refused");
+  hub.emit({ type: "rtc_offer", sdp: "second" });
+  await settle();
+  const freshPeer = FakePeer.instances[1]!;
+  expect(freshPeer.sentTracks.at(-1)?.id).toBe("front");
+  await connection.setLocal(next);
+  expect(freshPeer.sentTracks.at(-1)?.id).toBe("usb");
+});
