@@ -27,6 +27,23 @@ test("a confirmed reply returns to the listening page without starting another c
   expect(conversationReducer(state, { type: "event", message: { type: "tts_status", speak_id: "s1", state: "finished" } }).view.name).toBe("listen");
 });
 
+test("new speech waits for the selected reply and End call discards the remaining choices", () => {
+  let state = conversationReducer(initialConversation, { type: "navigate", view: { name: "call" } });
+  const first = { turnId: "t1", heard: "Hello", replies: ["Hi"], lowConfidence: false, conversationId: "chat" };
+  const second = { ...first, turnId: "t2", heard: "Can you hear me?" };
+  state = conversationReducer(state, { type: "call-reply", reply: first });
+  const confirming = { name: "confirm", text: "Hi", source: "suggestion", from: state.view } as const;
+  state = conversationReducer(state, { type: "navigate", view: confirming });
+  state = conversationReducer(state, { type: "call-reply", reply: second });
+  expect(state.view).toEqual(confirming);
+  expect(state.callReplies).toEqual([first, second]);
+  state = conversationReducer(state, { type: "navigate", view: { name: "speaking", text: "Hi", speakId: "s1", after: "call", replyTurnId: "t1" } });
+  state = conversationReducer(state, { type: "event", message: { type: "tts_status", speak_id: "s1", state: "finished" } });
+  expect(state.view.name).toBe("call");
+  expect(state.callReplies).toEqual([second]);
+  expect(conversationReducer(state, { type: "navigate", view: { name: "drive" } }).callReplies).toEqual([]);
+});
+
 test("disconnect and matching TTS error never report successful completion", () => {
   const speaking: ConversationState = { ...initialConversation, view: { name: "speaking", text: "Hello", speakId: "s1" } };
   const lost = conversationReducer(speaking, { type: "disconnected" });

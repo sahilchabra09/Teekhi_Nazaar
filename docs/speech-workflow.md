@@ -1,13 +1,13 @@
-# Patient-approved phone speech
+# Patient-approved conversations
 
-1. Connect the robot phone and dashboard using the same patient account. The person at the robot selects **Request microphone** in IRIS.
-2. Open **Communicate → Listen and reply** on the patient dashboard. Only the signed-in patient in that pair can approve the request. Selecting **Allow microphone** starts one turn. A request expires after 60 seconds.
-3. The phone shows **Stop microphone** while capturing. Tap it to finish early. Capture also ends on speech completion, cancellation, disconnect or a 30-second limit. The overall server grant expires within 100 seconds of approval, including processing.
-4. **Drive** immediately cancels any pending capture or processing on the dashboard and sends cancellation to the phone. Late results are discarded. After **Speak it**, the dashboard waits for a fresh request.
+1. Connect the robot phone and dashboard with the same patient account. The visitor taps **Request conversation** on the phone.
+2. On the patient dashboard, one action card changes to **Answer call**. Selecting it opens the conversation. A pending invitation expires after 60 seconds.
+3. The visitor speaks and the patient chooses in-app messages. The phone plays confirmed replies aloud. Speech recognition pauses for playback and starts listening again within the same call. Subsequent utterances have their own IDs and share the original approval. The patient can take time to choose a reply.
+4. The patient selects **End call**, or **Drive** to leave communication and open the driving controls. A new conversation requires a new invitation. Losing the authenticated session or paired control connection also releases the microphone.
 
-The default speech path streams approved 16 kHz mono PCM through the authenticated server WebSocket to Deepgram. Android speech recognition is an alternative for an approved turn. In either case the API binds the request to the phone credential and approving browser session, accepts one utterance, and delivers results only to that dashboard. Phone video can stay connected during Drive. Outgoing phone microphone audio, including the WebRTC audio track, is enabled only during approved capture.
+Calls have no application-level silence, capture, or conversation-duration deadline. The default recognition path streams 16 kHz mono PCM through the authenticated API to Deepgram. Android speech recognition is an alternative. Configure `DEEPGRAM_API_KEY` on the server for the default path and voice synthesis. Reply generation uses the configured Talk provider. Both clients must support continuous calls. Older clients retain approval for a single utterance.
 
-Configure `DEEPGRAM_API_KEY` on the server for the default speech path and voice synthesis. Reply generation uses the configured Talk provider. On a laptop without a paired phone, use **Use laptop microphone** on the listening page to explicitly record one turn.
+When no phone is connected, **Use laptop microphone** on the listening page explicitly records a single local utterance.
 
 ## Historical workflows
 

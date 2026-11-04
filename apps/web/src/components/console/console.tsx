@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, Settings2, Square, TriangleAlert, Volume2, X } from "lucide-react";
+import { ArrowLeft, Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, PhoneCall, PhoneOff, Settings2, Square, TriangleAlert, Volume2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import { DRIVE_INTERVAL_MS, DRIVE_TOPIC, DrivePublisher, type DriveAction, type 
 import { conversationReducer, initialConversation } from "@/lib/robot/conversation";
 import type { ConsoleView as View, ReplySource } from "@/lib/robot/conversation";
 import { useRobotConnection } from "@/lib/robot/use-robot-connection";
+import type { HubMessage } from "@/lib/rtc/robot-stream";
 import { TalkApiError, talkApi } from "@/lib/talk/api";
 import { UtteranceRecorder } from "@/lib/talk/recorder";
 import { speakAloud, stopSpeaking } from "@/lib/talk/speak";
@@ -43,9 +44,19 @@ export default function Console({ userName, appliancePassword }: { userName: str
   const recorder = useRef<UtteranceRecorder | null>(null);
   const request = useRef<AbortController | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const phoneCapture = useRef<{ id: string; approved: boolean; expires: number; hub: NonNullable<typeof connection.hub>; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const phoneCapture = useRef<{
+    id: string;
+    turnId: string | null;
+    continuous: boolean;
+    approved: boolean;
+    expires: number;
+    hub: NonNullable<typeof connection.hub>;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   /** Current conversation (= one AutoSage chat). Cleared when the patient leaves conversation mode. */
   const conversationId = useRef<string | null>(null);
+  const inCall = phoneCapture.current?.continuous === true && phoneCapture.current.approved;
+  const currentReply = conversation.callReplies[0];
   const setView = useCallback((next: View) => dispatch({ type: "navigate", view: next }), []);
   const confirm = (text: string, from: View, source: ReplySource = "phrase") => setView({ name: "confirm", text, source, from });
   /** Set when the server started a new conversation (long silence / someone new greeting). */
@@ -122,7 +133,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
     };
     const timer = setInterval(tick, DRIVE_INTERVAL_MS);
     const leave = () => stop();
-    const visibility = () => { if (document.hidden) leave(); };
+    const visibility = () => { if (document.hidden && !phoneCapture.current?.continuous) leave(); };
     window.addEventListener("blur", leave);
     window.addEventListener("pagehide", leave);
     document.addEventListener("visibilitychange", visibility);
@@ -171,16 +182,25 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
   // ───────────────────────────── Say something ─────────────────────────────
 
+  /** Leaving conversation mode ends the conversation; the next "Say something" opens a new chat. */
+  const endConversation = useCallback(() => {
+    const id = conversationId.current;
+    conversationId.current = null;
+    setNewSpeaker(null);
+    if (id) void talkApi.endConversation(id).catch(() => {});
+  }, []);
+
   const clearPhoneTurn = useCallback((notifyPhone: boolean) => {
     const capture = phoneCapture.current;
     if (!capture) return;
     phoneCapture.current = null;
     clearTimeout(capture.timer);
     setPendingId(null);
+    if (capture.continuous && capture.approved) endConversation();
     if (notifyPhone) {
-      try { capture.hub.send({ type: "listen", action: "cancel", request_id: capture.id, ts: Date.now() }); } catch { /* Peer disconnected. */ }
+      try { capture.hub.send({ type: "listen", action: "cancel", request_id: capture.id, ...(capture.continuous && { call_id: capture.id }), ts: Date.now() }); } catch { /* Peer disconnected. */ }
     }
-  }, []);
+  }, [endConversation]);
 
   const abortWork = useCallback(() => {
     clearPhoneTurn(true);
@@ -196,8 +216,14 @@ export default function Console({ userName, appliancePassword }: { userName: str
     const offListen = hub.on("listen", message => {
       const id = message.request_id;
       if (typeof id !== "string" || !id || id.length > 128) return;
-      if (message.action === "cancel" && phoneCapture.current?.id === id) {
-        const approved = phoneCapture.current.approved;
+      const current = phoneCapture.current;
+      if (message.action === "start" && current?.approved && current.continuous &&
+          current.hub === hub && message.call_id === current.id) {
+        current.turnId = id;
+        return;
+      }
+      if (message.action === "cancel" && current?.id === id) {
+        const approved = current.approved;
         clearPhoneTurn(false);
         if (approved) setView({ name: "listen" });
         return;
@@ -211,28 +237,46 @@ export default function Console({ userName, appliancePassword }: { userName: str
       const expires = Math.min(Date.now() + 60_000, typeof message.expires_at_ms === "number" ? message.expires_at_ms : Infinity);
       if (expires <= Date.now()) return;
       const timer = setTimeout(() => { if (phoneCapture.current?.id === id) clearPhoneTurn(true); }, expires - Date.now());
-      phoneCapture.current = { id, hub, timer, expires, approved: false };
+      phoneCapture.current = { id, turnId: id, hub, timer, expires, approved: false, continuous: message.continuous === true };
       setPendingId(id);
     });
-    const offResult = hub.on("talk_result", message => {
+    function matchingTurn(message: HubMessage) {
       const capture = phoneCapture.current;
-      if (!capture?.approved || capture.hub !== hub || capture.id !== message.request_id) return;
-      clearPhoneTurn(false);
+      return capture?.approved && capture.hub === hub && capture.turnId === message.request_id &&
+        (!capture.continuous || message.call_id === capture.id) ? capture : null;
+    }
+    const offResult = hub.on("talk_result", message => {
+      const capture = matchingTurn(message);
+      if (!capture || !capture.turnId) return;
+      const turnId = capture.turnId;
+      if (capture.continuous) capture.turnId = null;
+      else clearPhoneTurn(false);
       const result = message.result as import("@/lib/talk/api").UtteranceResult | null;
-      if (message.ok && result?.status === "no_speech") { setView({ name: "no-speech" }); return; }
+      if (message.ok && result?.status === "no_speech") { if (!capture.continuous) setView({ name: "no-speech" }); return; }
       if (!message.ok || result?.status !== "ok" || typeof result.conversationId !== "string" ||
           typeof result.heard !== "string" || !Array.isArray(result.replies) || result.replies.length !== 3 ||
           !result.replies.every(r => typeof r === "string" && r.trim() && r.length <= 4000)) {
         toast.error("The phone could not complete this listening turn.");
-        setView({ name: "listen" }); return;
+        if (!capture.continuous) setView({ name: "listen" });
+        return;
       }
       conversationId.current = result.conversationId;
       announceSwitch(result.newConversation);
+      if (capture.continuous) {
+        dispatch({ type: "call-reply", reply: { turnId, conversationId: result.conversationId, heard: result.heard,
+          replies: result.replies, lowConfidence: result.lowConfidence } });
+        return;
+      }
       setView({ name: "suggestions", utteranceId: result.conversationId, heard: result.heard, replies: result.replies, lowConfidence: result.lowConfidence });
     });
     const offState = hub.on("speech_state", message => {
-      const capture = phoneCapture.current;
-      if (!capture?.approved || capture.hub !== hub || capture.id !== message.request_id) return;
+      const capture = matchingTurn(message);
+      if (!capture) return;
+      if (capture.continuous) {
+        if (["ready", "no_speech", "paused", "failed"].includes(String(message.state))) capture.turnId = null;
+        if (message.state === "failed") toast.error("This message could not be transcribed. The call is still open.");
+        return;
+      }
       if (message.state === "processing") setView({ name: "thinking" });
       else if (message.state === "listening") setView({ name: "listening", speaking: true });
       else if (message.state === "no_speech" || message.state === "failed") {
@@ -256,7 +300,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
       abortWork();
       setView({ name: "listen" });
     };
-    const visibility = () => { if (document.hidden) leave(); };
+    const visibility = () => { if (document.hidden && !phoneCapture.current?.continuous) leave(); };
     window.addEventListener("pagehide", leave);
     document.addEventListener("visibilitychange", visibility);
     return () => {
@@ -267,29 +311,21 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
   const approveListening = () => {
     const capture = phoneCapture.current;
-    if (view.name !== "listen" || !connected || document.hidden || mode === "setup" || settingsOpen || !capture ||
+    if (!connected || document.hidden || mode === "setup" || settingsOpen || !capture ||
         capture.hub !== connection.hub || capture.approved || capture.id !== pendingId || Date.now() >= capture.expires) return;
     clearTimeout(capture.timer);
     capture.approved = true;
     setPendingId(null);
-    capture.timer = setTimeout(() => {
+    if (!capture.continuous) capture.timer = setTimeout(() => {
       if (phoneCapture.current !== capture) return;
       clearPhoneTurn(true);
       setView({ name: "listen" });
     }, 100_000);
     try {
-      capture.hub.send({ type: "listen", action: "start", request_id: capture.id, conversationId: conversationId.current, ts: Date.now() });
-      setView({ name: "listening", speaking: false });
+      capture.hub.send({ type: "listen", action: "start", request_id: capture.id, ...(capture.continuous && { continuous: true, call_id: capture.id }), conversationId: conversationId.current, ts: Date.now() });
+      setView(capture.continuous ? { name: "call" } : { name: "listening", speaking: false });
     } catch { clearPhoneTurn(false); toast.error("The phone disconnected before approval reached it."); }
   };
-
-  /** Leaving conversation mode ends the conversation; the next "Say something" opens a new chat. */
-  const endConversation = useCallback(() => {
-    const id = conversationId.current;
-    conversationId.current = null;
-    setNewSpeaker(null);
-    if (id) void talkApi.endConversation(id).catch(() => {});
-  }, []);
 
   const showError = useCallback(
     (error: unknown) => {
@@ -373,27 +409,41 @@ export default function Console({ userName, appliancePassword }: { userName: str
     [abortWork, setView, showError],
   );
 
+  async function moreCallReplies() {
+    if (!currentReply || request.current) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setView({ name: "call" });
+    try {
+      const result = await talkApi.moreReplies(currentReply.conversationId, controller.signal);
+      if (!controller.signal.aborted) dispatch({ type: "refresh-reply", turnId: currentReply.turnId, replies: result.replies });
+    } catch { if (!controller.signal.aborted) toast.error("Could not load more replies. You can still use the existing choices."); }
+    finally { if (request.current === controller) request.current = null; }
+  }
+
   /**
    * Speak a confirmed reply: through the robot phone when it's connected (it reports tts_status),
-   * otherwise on this laptop. A new listening turn needs another approval.
+   * otherwise on this laptop. During a call this reply belongs to the displayed message.
    */
   async function speak(text: string, source: ReplySource) {
     const fromTalk = source === "suggestion" && conversationId.current !== null;
-    if (fromTalk) void talkApi.spoken(conversationId.current!, text).catch(() => {});
-    const after = fromTalk ? "listen" : "home";
+    const replyId = inCall ? currentReply?.conversationId : conversationId.current;
+    if (source === "suggestion" && replyId) void talkApi.spoken(replyId, text).catch(() => {});
+    const after = inCall ? "call" : fromTalk ? "listen" : "home";
+    const replyTurnId = inCall && source !== "phrase" ? currentReply?.turnId : undefined;
     const speakId = `s_${crypto.randomUUID()}`;
 
     if (connection.hub && connection.phone && connection.status === "connected") {
       try {
-        connection.hub.send({ type: "speak", speak_id: speakId, text, source, ts: Date.now() });
-        setView({ name: "speaking", text, speakId, after });
+        connection.hub.send({ type: "speak", speak_id: speakId, text, source, ...(inCall && { call_id: phoneCapture.current!.id }), ts: Date.now() });
+        setView({ name: "speaking", text, speakId, after, replyTurnId });
       } catch (cause) {
         toast.error(cause instanceof Error ? cause.message : "Could not send speech");
       }
       return;
     }
 
-    setView({ name: "speaking", text, speakId, after });
+    setView({ name: "speaking", text, speakId, after, replyTurnId });
     await speakAloud(text);
     dispatch({ type: "event", message: { type: "tts_status", speak_id: speakId, state: "finished" } });
   }
@@ -430,13 +480,11 @@ export default function Console({ userName, appliancePassword }: { userName: str
     // Leaving the control surface cancels recording, speech, and drive holds.
     if (next !== "live") {
       stop();
-      abortWork();
-      stopSpeaking();
-      endConversation();
+      if (!inCall) { abortWork(); stopSpeaking(); endConversation(); }
       if (view.name === "listening" || view.name === "thinking") setView({ name: "listen" });
     }
     setMode(next);
-  }, [stop, abortWork, endConversation, setView, view.name]);
+  }, [stop, abortWork, endConversation, inCall, setView, view.name]);
 
   const settingsButton = useDwell(() => {
     if (view.name === "listening" || view.name === "thinking") {
@@ -466,6 +514,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
     hint: view.name === "drive" ? "Select again for main actions" : hasFeed ? "Open directional controls" : "Connect the phone to drive",
     onSelect: () => leaveConversation(view.name === "drive" ? "home" : "drive"),
   };
+  const endCall: PanelAction = { kind: "action", key: "end-call", title: "End call", icon: PhoneOff, tone: "tomato", onSelect: goHome };
   let cards: PanelCard[] = [];
   let feedStatus: string | null = null;
 
@@ -503,17 +552,38 @@ export default function Console({ userName, appliancePassword }: { userName: str
       break;
 
     case "listen":
-      heading = pendingId ? "The person at the robot is asking to speak" : "Listen and reply";
-      cards = [driveCard];
-      if (pendingId) {
-        cards.push({ kind: "action", key: "allow", title: "Allow microphone", hint: "Listen to the robot phone for one turn", tone: "teal", onSelect: approveListening },
-          { kind: "action", key: "decline", title: "Decline", tone: "plain", onSelect: () => clearPhoneTurn(true) });
-      } else {
-        cards.push(connected
-          ? { kind: "preview", key: "waiting", text: "Waiting for a request", hint: "The person at the robot can request the microphone on the phone." }
-          : { kind: "action", key: "local", title: "Use laptop microphone", hint: "Record one turn on this device", tone: "teal", onSelect: () => void startLocalListening() },
-          { kind: "action", key: "close", title: "Close listening", tone: "plain", onSelect: goHome });
+      heading = "Listen and reply";
+      cards = [driveCard, connected
+        ? { kind: "preview", key: "waiting", text: "Waiting for a request", hint: "The person at the robot can request a conversation on the phone." }
+        : { kind: "action", key: "local", title: "Use laptop microphone", hint: "Record one turn on this device", tone: "teal", onSelect: () => void startLocalListening() },
+        pendingId
+          ? { kind: "action", key: "decline", title: "Decline", tone: "plain", onSelect: () => clearPhoneTurn(true) }
+          : { kind: "action", key: "close", title: "Close listening", tone: "plain", onSelect: goHome }];
+      break;
+
+    case "call":
+    case "call-phrases": {
+      heading = view.name === "call-phrases" ? "Quick phrases" : "Conversation open";
+      feedStatus = "Call connected";
+      const fromVisitor = view.name === "call" && currentReply;
+      const texts = fromVisitor ? (currentReply.lowConfidence ? ["Sorry, could you repeat that?"] : currentReply.replies) : QUICK_PHRASES;
+      cards = texts.map((text, i) => ({ kind: "action", key: JSON.stringify([fromVisitor ? currentReply.turnId : "phrase", i, text]),
+        title: text, tone: TONES[i % TONES.length]!, requireEntry: Boolean(fromVisitor),
+        onSelect: () => confirm(text, view, fromVisitor ? currentReply.lowConfidence ? "system" : "suggestion" : "phrase") }));
+      options = [driveCard, { kind: "action", key: "call-menu", title: view.name === "call-phrases" ? "Return to call" : "Message options",
+        hint: conversation.callReplies.length > 1 ? `${conversation.callReplies.length - 1} more waiting` : undefined,
+        tone: "sky", onSelect: () => setView({ name: view.name === "call-phrases" ? "call" : "call-menu" }) }, endCall];
+      break;
+    }
+    case "call-menu":
+      heading = "Message options";
+      cards = [{ kind: "action", key: "phrases", title: "Quick phrases", tone: "honey", onSelect: () => setView({ name: "call-phrases" }) }];
+      if (currentReply) {
+        cards.push({ kind: "action", key: "more", title: "New replies", tone: "sky", onSelect: () => void moreCallReplies() },
+          { kind: "action", key: "skip", title: conversation.callReplies.length > 1 ? "Next message" : "Dismiss message",
+            tone: "plain", onSelect: () => dispatch({ type: "skip-reply" }) });
       }
+      options = [driveCard, { kind: "action", key: "return", title: "Return to call", tone: "sky", onSelect: () => setView({ name: "call" }) }, endCall];
       break;
 
     case "listening":
@@ -618,8 +688,23 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
   if (["suggestions", "no-speech", "confirm", "speaking"].includes(view.name)) options.unshift(driveCard);
 
+  if (inCall && (view.name === "speaking" || view.name === "confirm")) options.push(endCall);
+  if (pendingId) {
+    const call = phoneCapture.current?.continuous;
+    const invitation: PanelAction = { kind: "action", key: "incoming-" + pendingId, title: call ? "Answer call" : "Allow microphone",
+      hint: call ? "Someone at the robot wants to talk" : "Listen to the robot phone for one turn",
+      icon: PhoneCall, tone: "teal", requireEntry: true, onSelect: approveListening };
+    const index = cards.findIndex(card => ["talk", "listen", "waiting"].includes(card.key));
+    if (index >= 0) cards[index] = invitation;
+    else if (cards.length < 3) cards.push(invitation);
+    else {
+      const replace = cards.findIndex(card => !["drive", "stop", "back", "home", "cancel", "speak", "decline"].includes(card.key));
+      if (replace >= 0) cards[replace] = invitation;
+    }
+  }
+
   const heard =
-    view.name === "suggestions"
+    inCall ? currentReply?.heard ?? null : view.name === "suggestions"
       ? view.heard
       : view.name === "thinking"
         ? (view.heard ?? null)

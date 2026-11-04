@@ -44,11 +44,13 @@ The phone enforces authorization and drive readiness locally. A broker PUBACK re
 
 In **Drive**, select **Drive** again to leave driving. Use the center **Stop** target to disarm the phone while staying in Drive. During eye setup, select an available numbered step to revisit it.
 
-## Approve a listening turn
+## Answer a conversation request
 
-The person at the robot requests the microphone on the phone. On the paired patient dashboard, open **Communicate → Listen and reply**. Select **Allow microphone** to begin one turn immediately, or **Decline**. A pending request expires after 60 seconds. Requests never open a screen over Drive.
+The person at the robot taps **Request conversation** on the phone. One card in the patient’s **Actions** section becomes **Answer call** for up to 60 seconds. Select it once to answer. With gaze, look away and back if the new card appeared where you were already looking. Ignoring the request keeps the current screen and driving controls available.
 
-During an approved turn, the phone shows a power-style **Stop microphone** button. Select it to finish early. It disappears when capture ends, including at the 30-second capture limit. Select **Drive** on the dashboard at any point to cancel and discard the turn. Opening Drive leaves movement subject to its usual authorization and directional hold. Speaking a reply returns to the listening page and requires a new request for the next turn.
+The visitor speaks into the phone. The patient reads the transcribed speech and selects a reply or quick phrase. **Speak it** plays the message on the phone. Later messages wait while the patient chooses a reply. **Message options** includes quick phrases and choices for the current message.
+
+The call stays open through silence, transcription and playback. **End call** closes it and releases the microphone. **Drive** also closes communication before opening the drive controls. If either device disconnects or loses authorization, starting again requires a fresh phone request and patient approval.
 
 With no connected phone, **Use laptop microphone** explicitly records one local turn. The camera choice and microphone selection are in **Settings**.
 

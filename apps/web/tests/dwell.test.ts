@@ -35,3 +35,21 @@ test("a stale capture or tracking loss resets incomplete dwell", () => {
   dwell.update(a.target, 50, 50, 2600);
   expect(a.events.at(-1)).toBe("select");
 });
+
+test("a request replacing a partially dwelled card needs a fresh gaze entry", () => {
+  const dwell = new ScreenDwell(), original = button(), request = button();
+  request.target.dataset.gazeRequireEntry = "";
+  for (const t of [0, 100, 200]) dwell.update(original.target, 50, 50, t);
+  for (let t = 300; t <= 1600; t += 100) dwell.update(request.target, 50, 50, t);
+  expect(request.events).toEqual([]);
+  dwell.update(null, 120, 50, 1700);
+  for (let t = 1800; t <= 2800; t += 100) dwell.update(request.target, 50, 50, t);
+  expect(request.events).toEqual(["enter", "select"]);
+});
+
+test("ordinary card replacements can still start a new dwell at the same position", () => {
+  const dwell = new ScreenDwell(), original = button(), replacement = button();
+  dwell.update(original.target, 50, 50, 0);
+  for (let t = 100; t <= 1100; t += 100) dwell.update(replacement.target, 50, 50, t);
+  expect(replacement.events).toEqual(["enter", "select"]);
+});

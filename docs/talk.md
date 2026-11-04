@@ -1,6 +1,6 @@
 # Say something: listen, transcribe, suggest replies
 
-> The current phone workflow requires a per-turn request and patient approval. See the [speech workflow](./speech-workflow.md). The earlier migration discussion below is historical.
+> The current phone workflow requires one patient approval per conversation. See the [speech workflow](./speech-workflow.md). The earlier migration discussion below is historical.
 
 > **Update (AutoSage):** replies now come from **AutoSage fast-query on the patient's medical knowledge base**, and every conversation lives in **one AutoSage chat**. The OpenRouter reply models below are the **fallback**. The talk routes now take a `conversationId` and require the **patient** role. See [care.md](./care.md) §4–5 and §7 for the changed API.
 
@@ -72,7 +72,7 @@ Open **Communicate** and choose **Listen and reply** or **Quick phrases**. Selec
 
 - Each action card supports gaze selection, keyboard activation and clicking.
 - Choose **Speak it** to speak a phrase or reply. **Cancel** returns to the choices.
-- **Conversation mode:** after a suggested reply is spoken, the console waits for another request. Each new turn requires approval.
+- **Conversation mode:** after a suggested reply is spoken, the phone resumes listening within the approved call. The patient selects **End call** to finish.
 - Choose a microphone in **Settings** on the patient bar. Device names appear after the browser grants microphone access.
 
 ---
