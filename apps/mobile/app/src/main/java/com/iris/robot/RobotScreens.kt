@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.iris.robot.core.ListenPhase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import androidx.compose.ui.viewinterop.AndroidView
@@ -89,7 +90,7 @@ import androidx.compose.ui.viewinterop.AndroidView
                     }
                     IrisSymbol(Symbol.Chevron, Modifier.size(18.dp), Clay.Soft)
                 }
-                if (signedIn) Text("Your camera and microphone turn on when the session starts. Audio streams to Deepgram for speech recognition.", style = MaterialTheme.typography.bodySmall,
+                if (signedIn) Text("The camera turns on when the session starts. The microphone turns on only when the patient approves a request.", style = MaterialTheme.typography.bodySmall,
                     color = Clay.Soft, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 12.dp))
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -177,13 +178,13 @@ import androidx.compose.ui.viewinterop.AndroidView
                             Text("Laptop camera", style = MaterialTheme.typography.labelMedium, color = Clay.Soft)
                             StatusPill(status, state.frontendVideoLive)
                         }
-                        SessionSpeech(state) { settings = true }
+                        SessionSpeech(state, model::tap) { settings = true }
                     }
                 }
             } else {
                 Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     SessionVideo(state, Modifier.weight(1f).fillMaxWidth())
-                    SessionSpeech(state) { settings = true }
+                    SessionSpeech(state, model::tap) { settings = true }
                 }
             }
         }
@@ -210,26 +211,40 @@ import androidx.compose.ui.viewinterop.AndroidView
         }
 }
 
-@Composable private fun SessionSpeech(state: RobotUiState, openSettings: () -> Unit) {
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Clay.Surface).padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                IrisSymbol(if (state.speaking) Symbol.Speaker else Symbol.Mic, Modifier.size(18.dp), Clay.Teal)
-                Text(when {
-                    state.speaking -> "Speaking"
-                    !state.sttReady -> "Preparing microphone"
-                    state.activeSpeech -> "Listening…"
-                    else -> "Ready to listen"
-                }, style = MaterialTheme.typography.labelMedium, color = Clay.Teal)
-            }
-            if (state.caption.isNotBlank()) Text(state.caption, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+@Composable private fun SessionSpeech(state: RobotUiState, microphone: () -> Unit, openSettings: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Clay.Surface).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val phase = state.listenPhase
+        val label = when {
+            state.speaking -> "IRIS is speaking"
+            !state.sttReady -> "Preparing microphone"
+            !state.hub || !state.web -> "Connect the patient dashboard to communicate"
+            phase == ListenPhase.CAPTURING -> "Microphone on · up to 30 seconds"
+            phase == ListenPhase.IDLE && state.listening == "Ready" -> "Ask the patient to turn on this microphone"
+            else -> state.listening
         }
-        if (state.error != null) TextButton(onClick = openSettings, modifier = Modifier.fillMaxWidth()) { Text("View session notice", color = Clay.Tomato) }
-        Text(if (state.speaking) "Listening pauses while IRIS speaks."
-            else if (state.listening == "Processing speech") "Processing your speech..."
-            else "Speak naturally. Deepgram listens during the session and detects when you pause.",
-            style = MaterialTheme.typography.bodyMedium, color = Clay.Soft,
-            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(12.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Clay.Teal)
+        if (state.caption.isNotBlank()) Text(state.caption, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        if (phase == ListenPhase.CAPTURING) {
+            ClayButton(onClick = microphone, tone = Clay.Tomato, modifier = Modifier.fillMaxWidth()) {
+                IrisSymbol(Symbol.Power, Modifier.size(20.dp), Color.White)
+                Spacer(Modifier.width(8.dp))
+                Text("Stop microphone")
+            }
+        } else {
+            ClayButton(onClick = microphone, modifier = Modifier.fillMaxWidth(),
+                enabled = state.hub && state.web && state.sttReady && !state.speaking && phase == ListenPhase.IDLE) {
+                IrisSymbol(Symbol.Mic, Modifier.size(20.dp), LocalContentColor.current)
+                Spacer(Modifier.width(8.dp))
+                Text(when (phase) {
+                    ListenPhase.PENDING -> "Approval requested"
+                    ListenPhase.FINISHING -> "Finishing speech"
+                    else -> "Request microphone"
+                })
+            }
+        }
+        if (state.error != null) TextButton(onClick = openSettings) { Text("View session notice", color = Clay.Tomato) }
+    }
 }
 
 @Composable private fun CameraWaiting(state: RobotUiState) {

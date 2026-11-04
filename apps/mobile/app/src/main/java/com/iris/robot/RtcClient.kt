@@ -49,14 +49,27 @@ class RtcClient(
     @Volatile private var webAvailable = false
     @Volatile private var closed = false
     private var epoch = 0
+    private var microphoneApproved = false
+
+    /** Apply immediately, including to the current peer while the RTC handler is busy. */
+    @Synchronized fun approveMicrophone(value: Boolean) {
+        microphoneApproved = value && !closed
+        adm?.setMicrophoneMute(!microphoneApproved)
+        audio?.setEnabled(microphoneApproved)
+        peer?.setAudioRecording(microphoneApproved)
+    }
 
     fun start() { handler.post {
         try {
             PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
-            adm = JavaAudioDeviceModule.builder(context)
+            val module = JavaAudioDeviceModule.builder(context)
                 .setUseHardwareAcousticEchoCanceler(true).setUseHardwareNoiseSuppressor(true)
                 .setSamplesReadyCallback { s -> listener.onMicSamples(s.data, s.sampleRate, s.channelCount) }
                 .createAudioDeviceModule()
+            synchronized(this) {
+                module.setMicrophoneMute(!microphoneApproved)
+                adm = module
+            }
             factory = PeerConnectionFactory.builder().setAudioDeviceModule(adm)
                 .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
                 .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext)).createPeerConnectionFactory()
@@ -69,12 +82,14 @@ class RtcClient(
             capturer!!.initialize(helper, context, videoSource!!.capturerObserver)
             video = factory!!.createVideoTrack("iris-video", videoSource).also { it.addSink(jpegSink) }
             audioSource = factory!!.createAudioSource(MediaConstraints())
-            audio = factory!!.createAudioTrack("iris-audio", audioSource)
+            synchronized(this) {
+                audio = factory!!.createAudioTrack("iris-audio", audioSource).also { it.setEnabled(microphoneApproved) }
+            }
             capturer!!.startCapture(640, 480, 24)
-            listener.startStandalone()
+            listener.setStandalone(true)
             state("idle")
             if (web) startPeer()
-        } catch (e: Exception) { listener.startStandalone(); state("failed"); error("Camera/WebRTC setup failed: ${e.message}") }
+        } catch (e: Exception) { listener.setStandalone(true); state("failed"); error("Camera/WebRTC setup failed: ${e.message}") }
     } }
     fun peerAvailable(value: Boolean) { handler.post {
         if (closed) return@post
@@ -83,16 +98,16 @@ class RtcClient(
         web = value
         closePeer()
         if (web && factory != null) startPeer() else {
-            if (!recognition) listener.startStandalone()
+            if (!recognition) listener.setStandalone(true)
             state(if (fallback) "fallback" else "idle")
         }
     } }
     fun setModes(jpeg: Boolean, androidStt: Boolean, ready: () -> Unit = {}) { handler.post {
         forceJpeg = jpeg; recognition = androidStt; fallback = jpeg || androidStt
         closePeer()
-        if (recognition) listener.stopStandalone()
+        if (recognition) listener.setStandalone(false)
         if (web && factory != null) startPeer()
-        else { if (!recognition) listener.startStandalone(); state(if (fallback) "fallback" else "idle") }
+        else { if (!recognition) listener.setStandalone(true); state(if (fallback) "fallback" else "idle") }
         ready()
     } }
     fun requestOffer() { handler.post {
@@ -105,11 +120,11 @@ class RtcClient(
         if (closed || !web || factory == null) return
         if (forceJpeg || recognition || fallback) {
             fallback = true
-            if (!recognition) listener.startStandalone()
+            if (!recognition) listener.setStandalone(true)
             state("fallback"); return
         }
         // AudioRecord has fully stopped and released before WebRTC is allowed to own the mic.
-        listener.stopStandalone()
+        listener.setStandalone(false)
         closePeer()
         val generation = ++epoch
         state("connecting")
@@ -146,7 +161,10 @@ class RtcClient(
             override fun onDataChannel(c: DataChannel) = Unit
             override fun onRenegotiationNeeded() = Unit
         }) ?: run { useFallback("Could not create WebRTC connection"); return }
-        peer = connection
+        synchronized(this) {
+            connection.setAudioRecording(microphoneApproved)
+            peer = connection
+        }
         connection.addTrack(video, listOf("iris"))
         connection.addTrack(audio, listOf("iris"))
         // Reserve a receive direction for the optional patient video in the browser's answer.
@@ -158,7 +176,7 @@ class RtcClient(
     }
     private fun useFallback(message: String) {
         closePeer(); fallback = true
-        if (!recognition) listener.startStandalone()
+        if (!recognition) listener.setStandalone(true)
         state("fallback"); error(message)
     }
     fun accept(message: Msg) { handler.post {
@@ -187,7 +205,9 @@ class RtcClient(
         epoch++
         detachFrontendVideo()
         remote(null)
-        peer?.close(); peer?.dispose(); peer = null; remoteDescriptionSet = false; ice.clear()
+        val previous = synchronized(this) { peer.also { peer = null } }
+        previous?.close(); previous?.dispose()
+        remoteDescriptionSet = false; ice.clear()
     }
     private fun detachFrontendVideo() {
         val track = inboundVideo
@@ -253,12 +273,14 @@ class RtcClient(
     }
     override fun close() {
         closed = true
+        approveMicrophone(false)
         handler.post {
             closePeer()
             runCatching { capturer?.stopCapture() }; capturer?.dispose(); capturer = null
-            video?.removeSink(jpegSink); video?.dispose(); audio?.dispose()
+            video?.removeSink(jpegSink); video?.dispose()
+            synchronized(this) { audio?.dispose(); audio = null }
             videoSource?.dispose(); audioSource?.dispose(); helper?.dispose()
-            factory?.dispose(); adm?.release()
+            factory?.dispose(); synchronized(this) { adm?.release(); adm = null }
             jpegExecutor.shutdown()
             egl.release(); thread.quitSafely()
         }

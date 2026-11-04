@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.cos
 import kotlin.math.sin
 
-internal enum class Symbol { Settings, Camera, Laptop, Mic, Speaker, Close, Check, Arrow, Chevron, User }
+internal enum class Symbol { Settings, Camera, Laptop, Mic, Power, Speaker, Close, Check, Arrow, Chevron, User }
 
 @Composable internal fun IrisSymbol(symbol: Symbol, modifier: Modifier = Modifier, tint: Color = Clay.Pine) {
     Canvas(modifier.size(24.dp)) {
@@ -53,6 +53,10 @@ internal enum class Symbol { Settings, Camera, Laptop, Mic, Speaker, Close, Chec
                 roundRect(9f, 3f, 6f, 11f, 3f)
                 drawArc(tint, 0f, 180f, false, point(6f, 4f), Size(12 * s, 14 * s), style = stroke)
                 line(12f, 18f, 12f, 22f); line(9f, 22f, 15f, 22f)
+            }
+            Symbol.Power -> {
+                line(12f, 2.5f, 12f, 11f)
+                drawArc(tint, -55f, 290f, false, point(3.5f, 4.5f), Size(17 * s, 17 * s), style = stroke)
             }
             Symbol.Speaker -> {
                 val path = Path().apply { moveTo(3 * s, 10 * s); lineTo(7 * s, 10 * s); lineTo(12 * s, 5 * s); lineTo(12 * s, 19 * s); lineTo(7 * s, 14 * s); lineTo(3 * s, 14 * s); close() }

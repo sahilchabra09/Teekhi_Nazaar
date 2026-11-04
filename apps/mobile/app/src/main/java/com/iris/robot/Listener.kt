@@ -1,175 +1,136 @@
 package com.iris.robot
 
 import android.annotation.SuppressLint
-import android.content.Context
 import android.media.*
 import android.os.SystemClock
-import com.iris.robot.core.*
+import com.iris.robot.core.PcmResampler
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
+/** Receives PCM from the call or a standalone recorder only for the approved capture window. */
 class Listener(
-    context: Context,
-    private val address: HubAddress,
-    private val scope: CoroutineScope,
-    private val send: (Msg) -> Boolean,
-    private val status: (String, Boolean) -> Unit,
-    private val error: (String) -> Unit,
-    private val accountToken: String,
-    private val unauthorized: () -> Unit,
+    private val cloud: CloudSpeech,
+    private val failed: (String, String) -> Unit,
 ) : AutoCloseable {
-    private data class Samples(val bytes: ByteArray, val rate: Int, val channels: Int, val epoch: Int)
-    private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "iris-vad") }
-    private val dispatcher = executor.asCoroutineDispatcher()
+    private class Capture(val id: String, val deadline: Long) {
+        val resampler = PcmResampler()
+        val pending = ByteArrayOutputStream()
+    }
+    private data class Samples(val turn: Capture, val bytes: ByteArray, val rate: Int, val channels: Int)
+    private val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val audioScope = CoroutineScope(SupervisorJob() + dispatcher)
     private val samples = Channel<Samples>(8)
-    private val resampler = PcmResampler()
-    private val pending = ByteArrayOutputStream()
-    @Volatile private var pausedUntil = 0L
-    @Volatile private var enabled = true
-    @Volatile private var processing = false
-    @Volatile private var closed = false
-    @Volatile private var epoch = 0
-    private var recorder: AudioRecord? = null
+    @Volatile private var capture: Capture? = null
+    @Volatile private var standalone = true
+    @Volatile private var recorder: AudioRecord? = null
     private var recordingThread: Thread? = null
-    @Volatile private var recording = false
-    private val http = OkHttpClient.Builder().callTimeout(90, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS).writeTimeout(30, TimeUnit.SECONDS).build()
-    private val appContext = context.applicationContext
-    private val uploads = kotlinx.coroutines.sync.Semaphore(2)
-
-    private val cloud = CloudSpeech(address, accountToken, scope, { value ->
-        val active = value == "listening"
-        status(when (value) {
-            "processing" -> "Processing speech"
-            "reconnecting" -> "Reconnecting speech"
-            "failed" -> "Speech failed"
-            else -> if (active) "Someone is speaking" else "Listening"
-        }, active)
-        if (value == "failed") error("Speech processing failed. Check the server connection.")
-    }, error, unauthorized)
 
     init {
         audioScope.launch {
-            try {
-                status("Listening", false)
-                for (chunk in samples) {
-                    if (closed) break
-                    if (chunk.epoch != epoch || !enabled || processing || SystemClock.elapsedRealtime() < pausedUntil) continue
-                    val pcm = resampler.convert(chunk.bytes, chunk.rate, chunk.channels)
-                    pending.write(pcm)
-                    val bytes = pending.toByteArray()
+            for ((turn, bytes, rate, channels) in samples) {
+                if (!current(turn)) continue
+                try {
+                    val pcm = turn.resampler.convert(bytes, rate, channels)
                     var offset = 0
-                    while (offset + 1024 <= bytes.size) {
-                        if (chunk.epoch != epoch || SystemClock.elapsedRealtime() < pausedUntil) break
-                        val frame = bytes.copyOfRange(offset, offset + 1024)
-                        cloud.audio(frame)
-                        offset += 1024
+                    while (offset < pcm.size && current(turn)) {
+                        val count = minOf(1024 - turn.pending.size(), pcm.size - offset)
+                        turn.pending.write(pcm, offset, count)
+                        offset += count
+                        if (turn.pending.size() == 1024) {
+                            cloud.audio(turn.id, turn.pending.toByteArray())
+                            turn.pending.reset()
+                        }
                     }
-                    pending.reset()
-                    if (offset < bytes.size) pending.write(bytes, offset, bytes.size - offset)
-                }
-            } catch (e: Exception) {
-                if (!closed) error("Speech detection is unavailable. Restart the session and check microphone permission.")
+                } catch (_: Exception) { failed(turn.id, "Could not process microphone audio") }
             }
         }
     }
+
+    private fun current(turn: Capture) = capture === turn && SystemClock.elapsedRealtime() < turn.deadline
+
+    private fun enqueue(turn: Capture, bytes: ByteArray, count: Int, rate: Int, channels: Int) {
+        if (current(turn) && samples.trySend(Samples(turn, bytes.copyOf(count), rate, channels)).isFailure)
+            failed(turn.id, "Microphone audio could not keep up")
+    }
+
     fun onMicSamples(bytes: ByteArray, rate: Int, channels: Int) {
-        if (!closed && enabled && !processing && SystemClock.elapsedRealtime() >= pausedUntil) {
-            if (samples.trySend(Samples(bytes.copyOf(), rate, channels, epoch)).isFailure) {
-                // Never splice across dropped audio; discard the partial utterance instead.
-                resetAudio()
-            }
-        }
+        val turn = capture ?: return
+        if (!standalone) enqueue(turn, bytes, bytes.size, rate, channels)
     }
-    fun setEnabled(value: Boolean) { enabled = value; cloud.command(if (value) "resume" else "pause"); resetAudio() }
-    fun pause() { cloud.command("pause"); pausedUntil = Long.MAX_VALUE; resetAudio(); status("Speaking; listening paused", false) }
-    fun resumeAfter(delayMs: Long = 500) {
-        pausedUntil = SystemClock.elapsedRealtime() + delayMs
-        resetAudio()
-        scope.launch { delay(delayMs); if (!closed && enabled && !processing && SystemClock.elapsedRealtime() >= pausedUntil) { cloud.command("resume"); status("Listening", false) } }
+
+    @Synchronized fun start(id: String, deadline: Long) {
+        if (capture != null) return
+        cloud.start(id)
+        val turn = Capture(id, deadline)
+        capture = turn
+        if (standalone) openRecorder(turn)
     }
-    private fun resetAudio() {
-        epoch++
-        audioScope.launch { pending.reset(); resampler.reset() }
+
+    /** The RTC thread declares the source it owns. Selecting a source never grants consent. */
+    @Synchronized fun setStandalone(value: Boolean) {
+        standalone = value
+        val turn = capture
+        if (value && turn != null && current(turn)) openRecorder(turn) else closeRecorder()
     }
-    fun tap() { /* Automatic Deepgram endpointing needs no recording button. */ }
-    fun capture(action: String, id: String) {
-        if (closed || !enabled || processing || SystemClock.elapsedRealtime() < pausedUntil) {
-            send(SpeechState("failed", id)); return
-        }
-        resetAudio(); cloud.command(action, id)
-    }
-    fun transcript(id: String, text: String, confidence: Double?) {
-        submit(id, MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("utterance_id", id).addFormDataPart("text", text)
-            .addFormDataPart("confidence", (confidence ?: -1.0).toString()).build())
-    }
+
     @SuppressLint("MissingPermission")
-    @Synchronized fun startStandalone() {
-        if (recording || closed || !enabled) return
-        val min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        if (min <= 0) { error("Microphone unavailable"); return }
-        val input = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 16000, AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT, maxOf(min * 2, 4096))
-        if (input.state != AudioRecord.STATE_INITIALIZED) { input.release(); error("Microphone unavailable"); return }
-        try { input.startRecording() } catch (e: Exception) { input.release(); error("Microphone could not start"); return }
-        recorder = input; recording = true
-        recordingThread = Thread({
-            val buffer = ByteArray(1024)
-            try {
-                while (recording) {
-                    val n = input.read(buffer, 0, buffer.size)
-                    if (n <= 0) {
-                        if (recording && !closed) error("Microphone interrupted; restart IRIS")
-                        break
+    private fun openRecorder(turn: Capture) {
+        if (recorder != null) return
+        var input: AudioRecord? = null
+        try {
+            val min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            check(min > 0)
+            val mic = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 16000, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, maxOf(min * 2, 4096))
+            input = mic
+            check(mic.state == AudioRecord.STATE_INITIALIZED)
+            mic.startRecording()
+            recorder = mic
+            recordingThread = Thread({
+                val buffer = ByteArray(1024)
+                try {
+                    while (recorder === mic && current(turn)) {
+                        val count = mic.read(buffer, 0, buffer.size)
+                        check(count > 0)
+                        if (recorder === mic) enqueue(turn, buffer, count, 16000, 1)
                     }
-                    onMicSamples(buffer.copyOf(n), 16000, 1)
-                }
-            } catch (_: Exception) { if (recording && !closed) error("Microphone interrupted; restart IRIS") }
-        }, "iris-mic").also { it.start() }
-    }
-    @Synchronized fun stopStandalone() {
-        recording = false
-        runCatching { recorder?.stop() }
-        recordingThread?.join(1500)
-        recorder?.release(); recorder = null; recordingThread = null
-        resetAudio()
-    }
-    private fun submit(id: String, body: RequestBody) {
-        if (closed || !uploads.tryAcquire()) { send(SpeechState("failed", id)); error("Audio upload busy; try again"); return }
-        processing = true
-        resetAudio()
-        status("Processing speech", false)
-        send(SpeechState("processing", id))
-        scope.launch(Dispatchers.IO) {
-            try {
-                http.newCall(Request.Builder().url("${address.http}/api/utterance").header("Authorization", "Bearer $accountToken").post(body).build()).execute().use {
-                    if (it.code == 401) {
-                        send(SpeechState("failed", id))
-                        scope.launch(Dispatchers.Main.immediate) { unauthorized() }
-                    } else if (!it.isSuccessful) { send(SpeechState("failed", id)); error("Speech processing failed (HTTP ${it.code}). Check the server configuration.") }
-                }
-            } catch (e: Exception) { if (!closed) { send(SpeechState("failed", id)); error("Speech upload failed: ${e.message?.take(160) ?: "check server connection"}") } }
-            finally {
-                uploads.release(); processing = false
-                if (!closed) {
-                    resetAudio()
-                    if (enabled && SystemClock.elapsedRealtime() >= pausedUntil) status("Listening", false)
-                }
-            }
+                } catch (_: Exception) { if (recorder === mic && current(turn)) failed(turn.id, "Microphone interrupted") }
+            }, "iris-mic").also { it.start() }
+        } catch (_: Exception) {
+            input?.release()
+            failed(turn.id, "Microphone could not start")
         }
     }
-    override fun close() {
-        closed = true; cloud.close(); stopStandalone(); send(SpeechActivity(false))
-        samples.close(); audioScope.cancel()
-        // Stop the PCM worker before releasing its dispatcher.
-        dispatcher.close(); http.dispatcher.cancelAll(); http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll()
+
+    private fun closeRecorder() {
+        val mic = recorder ?: return
+        recorder = null
+        runCatching { mic.stop() }
+        recordingThread?.join(1500)
+        mic.release()
+        recordingThread = null
+    }
+
+    @Synchronized fun stop(id: String) {
+        if (capture?.id != id) return
+        capture = null
+        cloud.stop(id)
+        closeRecorder()
+    }
+
+    @Synchronized fun end(id: String) {
+        if (capture?.id == id) capture = null
+        cloud.end(id)
+        closeRecorder()
+    }
+
+    @Synchronized override fun close() {
+        capture = null
+        closeRecorder()
+        samples.close()
+        audioScope.cancel()
+        dispatcher.close()
     }
 }
