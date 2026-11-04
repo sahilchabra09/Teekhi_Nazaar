@@ -5,14 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { broker, TOPICS } from "./broker";
 
 /**
- * Appliance board (Gaze Connect firmware, appliances_control_hardware):
+ * ESP8266 appliance controls:
  *   control → gazeconnect/appliances/control  {"password":"…","pins":{"d1":"on"}}  (QoS 1, retain=false)
- *   state   ← gazeconnect/appliances/state    {"d0":"off","d1":"on",…}  (retained, published after
+ *   state   ← gazeconnect/appliances/state    {"d1":"on","d2":"off","d3":"off"}  (retained, published after
  *             every accepted command and when the board connects)
  * The board silently ignores a wrong password, so a command that never shows up in the state
  * report is flagged as unconfirmed.
  */
-/** IRIS exposes three appliances (one per card); the board itself has d0–d8. */
+/** The appliance board maps d1/d2/d3 to GPIO5/GPIO4/GPIO14. */
 export const APPLIANCE_PINS = ["d1", "d2", "d3"] as const;
 export type AppliancePin = (typeof APPLIANCE_PINS)[number];
 export type PinState = "on" | "off";
@@ -26,9 +26,14 @@ export function useAppliances() {
   const [unconfirmed, setUnconfirmed] = useState<Partial<Record<AppliancePin, true>>>({});
   const timers = useRef(new Map<AppliancePin, ReturnType<typeof setTimeout>>());
   const pendingRef = useRef(pending);
-  useEffect(() => {
-    pendingRef.current = pending;
-  }, [pending]);
+  const finish = useCallback((pin: AppliancePin) => {
+    clearTimeout(timers.current.get(pin));
+    timers.current.delete(pin);
+    const next = { ...pendingRef.current };
+    delete next[pin];
+    pendingRef.current = next;
+    setPending(next);
+  }, []);
 
   useEffect(
     () =>
@@ -49,70 +54,44 @@ export function useAppliances() {
         if (Object.keys(next).length === 0) return;
         setStates((s) => ({ ...s, ...next }));
         setLastReportAt(Date.now());
-        // A report matching what we asked for confirms the command.
-        const confirmed = (Object.keys(pendingRef.current) as AppliancePin[]).filter((p) => next[p] === pendingRef.current[p]);
-        if (confirmed.length) {
-          for (const p of confirmed) {
-            clearTimeout(timers.current.get(p));
-            timers.current.delete(p);
-          }
-          setPending((cur) => {
-            const copy = { ...cur };
-            for (const p of confirmed) delete copy[p];
-            return copy;
-          });
-          setUnconfirmed((cur) => {
-            const copy = { ...cur };
-            for (const p of confirmed) delete copy[p];
-            return copy;
-          });
+        for (const pin of APPLIANCE_PINS) {
+          if (next[pin] !== undefined && next[pin] === pendingRef.current[pin]) finish(pin);
         }
+        setUnconfirmed((previous) => {
+          const remaining = { ...previous };
+          for (const pin of APPLIANCE_PINS) if (next[pin] !== undefined) delete remaining[pin];
+          return remaining;
+        });
       }),
-    [],
+    [finish],
   );
 
   useEffect(() => {
     const t = timers.current;
-    return () => t.forEach((timer) => clearTimeout(timer));
+    return () => { t.forEach(clearTimeout); t.clear(); };
   }, []);
 
   /** Flip one pin. Rejects if the broker didn't accept the command. */
   const toggle = useCallback(
     async (pin: AppliancePin, password: string) => {
-      const target: PinState = (pendingRef.current[pin] ?? states[pin]) === "on" ? "off" : "on";
-      setPending((p) => ({ ...p, [pin]: target }));
-      setUnconfirmed((u) => {
-        const copy = { ...u };
-        delete copy[pin];
-        return copy;
-      });
+      if (!states[pin] || pendingRef.current[pin]) return;
+      const target: PinState = states[pin] === "on" ? "off" : "on";
+      pendingRef.current = { ...pendingRef.current, [pin]: target };
+      setPending(pendingRef.current);
+      const timeout = setTimeout(() => {
+        finish(pin);
+        setUnconfirmed((u) => ({ ...u, [pin]: true }));
+      }, CONFIRM_TIMEOUT_MS);
+      timers.current.set(pin, timeout);
       try {
         await broker.publish(TOPICS.applianceControl, { password, pins: { [pin]: target } });
       } catch (error) {
-        setPending((p) => {
-          const copy = { ...p };
-          delete copy[pin];
-          return copy;
-        });
+        if (timers.current.get(pin) === timeout) finish(pin);
         throw error;
       }
-      clearTimeout(timers.current.get(pin));
-      timers.current.set(
-        pin,
-        setTimeout(() => {
-          timers.current.delete(pin);
-          if (pendingRef.current[pin] === undefined) return;
-          setPending((p) => {
-            const copy = { ...p };
-            delete copy[pin];
-            return copy;
-          });
-          setUnconfirmed((u) => ({ ...u, [pin]: true }));
-        }, CONFIRM_TIMEOUT_MS),
-      );
       return target;
     },
-    [states],
+    [states, finish],
   );
 
   return { states, pending, unconfirmed, lastReportAt, toggle };

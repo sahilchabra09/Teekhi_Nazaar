@@ -16,6 +16,7 @@ export type PanelCard =
       icon?: LucideIcon;
       tone: Tone;
       onSelect: () => void;
+      disabled?: boolean;
     }
   | {
       kind: "preview";
@@ -76,12 +77,13 @@ const TONE_CLASS: Record<Tone, string> = {
 };
 
 function ActionCard({ card }: { card: Extract<PanelCard, { kind: "action" }> }) {
-  const { ref, props } = useDwell<HTMLButtonElement>(card.onSelect);
+  const { ref, props } = useDwell<HTMLButtonElement>(card.onSelect, { disabled: card.disabled });
   const Icon = card.icon;
   return (
     <button
       ref={ref}
       {...props}
+      disabled={card.disabled}
       className={`clay-press relative flex min-h-0 flex-1 basis-0 flex-col items-center justify-center gap-3 overflow-hidden rounded-[2.25rem] px-5 py-4 text-center ${TONE_CLASS[card.tone]}`}
     >
       <span className="dwell-fill" />

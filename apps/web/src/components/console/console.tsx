@@ -440,6 +440,7 @@ export default function Console({ userName }: { userName: string }) {
           kind: "action",
           key: pin,
           title: `Appliance ${i + 1}`,
+          disabled: state === undefined || !!pending,
           hint: pending
             ? `Turning ${pending}…`
             : noReply
@@ -448,7 +449,7 @@ export default function Console({ userName }: { userName: string }) {
                 ? "On · look here to turn off"
                 : state === "off"
                   ? "Off · look here to turn on"
-                  : "State unknown",
+                  : "Waiting for appliance board",
           icon: pending ? Loader2 : noReply ? TriangleAlert : state === "on" ? Lightbulb : LightbulbOff,
           tone: state === "on" ? "teal" : "plain",
           onSelect: () => void toggleAppliance(pin),
