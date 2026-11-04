@@ -7,6 +7,7 @@ const MOBILE_FRESH_MS = 2500;
 const DRIVE_SPEED = 35;
 
 export type DriveAction = "forward" | "backward" | "left" | "right" | "stop";
+export type StopState = "unavailable" | "available" | "pending" | "disarmed";
 export type DriveSource = "gaze" | "pointer" | "keyboard";
 export type Direction = Exclude<DriveAction, "stop">;
 export type DriveIntent = {
@@ -115,7 +116,16 @@ export class DrivePublisher {
   }
   get ready() { return Boolean(!this.pendingStop && this.usable() && this.phoneState === "ready"); }
 
-  get stopNeedsRetry() { return Boolean(this.pendingStop && this.usable() && this.phoneState === "ready"); }
+  // Losing the picture blocks movement but must still allow a signed stop or retry.
+  get stopState(): StopState {
+    const now = this.now();
+    if (!globalThis.crypto?.subtle || !this.lease || epochAt(this.lease, now) >= this.lease.expiresAt) return "unavailable";
+    if (this.pendingStop) return "pending";
+    if (this.hold) return "available";
+    if (now - this.phoneAt >= MOBILE_FRESH_MS) return "unavailable";
+    if (this.phoneState === "disarmed") return "disarmed";
+    return this.phoneState === "ready" || this.phoneState === "driving" ? "available" : "unavailable";
+  }
 
   async start(action: Direction, source: DriveSource = "gaze") {
     if (this.hold) {

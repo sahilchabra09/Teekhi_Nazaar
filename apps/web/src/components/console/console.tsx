@@ -10,7 +10,7 @@ import { runAuthAction } from "@/lib/auth-actions";
 import { authClient } from "@/lib/auth-client";
 import { APPLIANCE_PINS, type AppliancePin, useAppliances } from "@/lib/mqtt/appliances";
 import { broker, useBrokerStatus } from "@/lib/mqtt/broker";
-import { DRIVE_INTERVAL_MS, DRIVE_TOPIC, DrivePublisher, type DriveAction, type DriveSource, type Direction } from "@/lib/mqtt/robot";
+import { DRIVE_INTERVAL_MS, DRIVE_TOPIC, DrivePublisher, type DriveAction, type DriveSource, type StopState, type Direction } from "@/lib/mqtt/robot";
 import { conversationReducer, initialConversation } from "@/lib/robot/conversation";
 import type { ConsoleView as View, ReplySource } from "@/lib/robot/conversation";
 import { useRobotConnection } from "@/lib/robot/use-robot-connection";
@@ -87,8 +87,8 @@ export default function Console({ userName, appliancePassword }: { userName: str
     () => available.current && performance.now() - frameAt.current < 1500 &&
       broker.getSnapshot().status === "connected" && document.visibilityState === "visible" && document.hasFocus(),
   ));
-  const [driveStatus, setDriveStatus] = useState<"ready" | "retry-stop" | "waiting">("waiting");
-  const ready = driveStatus === "ready";
+  const [ready, setReady] = useState(false);
+  const [stopState, setStopState] = useState<StopState>("unavailable");
   const [active, setActive] = useState<Direction | null>(null);
   const frame = useCallback(() => { frameAt.current = performance.now(); }, []);
   const lostFeed = useCallback(() => { frameAt.current = -Infinity; void driver.stop(); }, [driver]);
@@ -121,7 +121,8 @@ export default function Console({ userName, appliancePassword }: { userName: str
     const tick = () => {
       void driver.tick();
       setActive(driver.active);
-      setDriveStatus(driver.ready ? "ready" : driver.stopNeedsRetry ? "retry-stop" : "waiting");
+      setReady(driver.ready);
+      setStopState(driver.stopState);
     };
     const timer = setInterval(tick, DRIVE_INTERVAL_MS);
     const leave = () => stop();
@@ -436,6 +437,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
   switch (view.name) {
     case "home":
+    case "drive":
       cards = [
         driveCard,
         communicateCard,
@@ -448,19 +450,6 @@ export default function Console({ userName, appliancePassword }: { userName: str
           tone: "sky",
           onSelect: () => setView({ name: "appliances" }),
         },
-      ];
-      break;
-
-    case "drive":
-      heading = "Drive the car";
-      cards = [
-        driveCard,
-        { kind: "preview", key: "drive-help",
-          text: !hasFeed ? "Connect the robot phone" : ready || active ? "Look at a direction on the video" : "Waiting for drive access",
-          hint: !hasFeed ? "Use Connect phone in the video panel to open the robot camera." :
-            driveStatus === "retry-stop" ? "Select Stop again to confirm." :
-            ready || active ? "Hold for 0.9 seconds. Look away to stop." : "On the mounted phone, calibrate, authorize the session and enable driving." },
-        { kind: "action", key: "stop", title: "Stop driving", icon: Square, tone: "honey", onSelect: () => stop(true), disabled: !connected },
       ];
       break;
 
@@ -611,7 +600,11 @@ export default function Console({ userName, appliancePassword }: { userName: str
             localCamera={connection.camera}
             fallbackFrameUrl={connection.media.fallbackFrameUrl}
             mediaState={connection.media.state}
-            drive={view.name === "drive" ? { enabled: ready || active !== null, active, start, release, stop, frame, lostFeed } : undefined}
+            drive={view.name === "drive" ? {
+              enabled: ready || active !== null,
+              stopState: connected && brokerState.status === "connected" ? stopState : "unavailable",
+              active, start, release, stop, frame, lostFeed,
+            } : undefined}
             heard={heard}
             heardLabel={
               view.name === "suggestions" && view.lowConfidence

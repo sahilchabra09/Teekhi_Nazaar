@@ -8,9 +8,9 @@ The console uses the robot phone for driving and a separate ESP8266 for the two 
 2. On the phone, open **Session settings**, tap **Calibrate**, **Authorize**, then **Enable driving** once the robot is online.
 3. In the patient dashboard choose **Setup**. After Screen 1 calibration and the accuracy check, look at or click **Continue to dashboard** to use **Drive**, **Communicate**, and **Appliances** with gaze. If the accuracy check has not passed, the same button opens the dashboard with gaze off. Choose **Drive** to show the directional regions.
 4. Fixate on a labelled region of the phone video for 900 ms. Keep looking there to continue. The outer columns turn left and right. The middle column drives forward at the top, stops in the centre and reverses at the bottom. You can also press and hold a region with a pointer or focus it and hold Space or Enter.
-5. Look away, release the control, or select **Stop** to end the movement. If the console asks you to press Stop again, select the red **Stop** button to send a fresh signed stop. A stop disarms the phone. Tap **Enable driving** on the phone and make a new selection before the next movement.
+5. Look away, release the control, or select **Stop** to end the movement. The red **Stop** target is in the center of the robot picture. While confirmation is pending, it reads **Retry stop**. Select it to send a fresh signed stop. The status below the picture shows when the phone reports that driving is disarmed. A stop disarms the phone. Tap **Enable driving** on the phone and make a new selection before the next movement.
 
-To send a local camera view back to the phone, pick **Shared camera** in **Settings**, then choose **Share camera** in the video panel. The waiting screen and the laptop-camera preview have no drive regions. Controls require recent robot frames, a connected phone and broker, a current grant, and a fresh `ready` status from the calibrated phone with its ESP online. During a hold the phone may report `driving`. The console stops renewing if gaze or feed is lost, the tab loses focus or is hidden, a modal opens, or the grant, connection or mobile status becomes unusable. It attempts a signed stop for an active hold. The phone's intention timeout also disarms it if updates stop arriving.
+To send a local camera view back to the phone, pick **Shared camera** in **Settings**, then choose **Share camera** in the video panel. If the picture drops during an authorized drive session, the center can still send a stop. Movement requires the robot picture. Controls require recent robot frames, a connected phone and broker, a current grant, and a fresh `ready` status from the calibrated phone with its ESP online. During a hold the phone may report `driving`. The console stops renewing if gaze or feed is lost, the tab loses focus or is hidden, a modal opens, or the grant, connection or mobile status becomes unusable. It attempts a signed stop for an active hold. The phone's intention timeout also disarms it if updates stop arriving.
 
 ### Drive protocol
 
@@ -42,7 +42,7 @@ The phone enforces authorization and drive readiness locally. A broker PUBACK re
 
 **Communicate** stays in the middle of the action panel. Select it to open the communication choices. Look away and select it again to return to the main actions. **Quick phrases** works the same way. It opens three phrase cards below the video, and selecting **Quick phrases** again closes them. Choosing a phrase opens a confirmation before anyone hears it.
 
-In **Drive**, select **Drive** again to leave driving. **Stop driving** remains a separate action. During eye setup, select an available numbered step to revisit it.
+In **Drive**, select **Drive** again to leave driving. Use the center **Stop** target to disarm the phone while staying in Drive. During eye setup, select an available numbered step to revisit it.
 
 ## Switch appliances
 

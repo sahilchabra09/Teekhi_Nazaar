@@ -1,15 +1,16 @@
 "use client";
 
-import { Octagon, VideoOff } from "lucide-react";
+import { VideoOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { ReactNode } from "react";
 import { VideoTool } from "./connection-bar";
-import type { DriveAction, Direction, DriveSource } from "@/lib/mqtt/robot";
+import type { DriveAction, Direction, DriveSource, StopState } from "@/lib/mqtt/robot";
 import type { RobotStream } from "@/lib/rtc";
 
 export type DriveControls = {
   enabled: boolean;
+  stopState: StopState;
   active: Direction | null;
   start: (action: Direction, source: DriveSource) => void;
   release: (action: DriveAction, source?: DriveSource) => void;
@@ -51,6 +52,7 @@ export function RobotFeed({
   // Regions only exist while the robot's camera (stream or JPEG fallback) is on screen;
   // the green waiting screen is never clickable.
   const hasFeed = Boolean(stream || fallbackFrameUrl);
+  const stopOnly = !hasFeed && (drive?.stopState === "pending" || drive?.stopState === "available");
   const videoRef = useRef<HTMLVideoElement>(null);
   const localRef = useRef<HTMLVideoElement>(null);
   const [muted, setMuted] = useState(true);
@@ -113,10 +115,10 @@ export function RobotFeed({
           style={mirrored ? { transform: "scaleX(-1)" } : undefined}
         />
       {fallbackFrameUrl && <img src={fallbackFrameUrl} onLoad={frame} onError={lostFeed} alt="Live robot camera, JPEG fallback" className="size-full object-cover" />}
-      {!stream && !fallbackFrameUrl && <EmptyFeed mediaState={mediaState} />}
+      {!hasFeed && !stopOnly && <EmptyFeed mediaState={mediaState} />}
 
       {hasFeed && drive && <GuideLines />}
-      {hasFeed && drive && <DriveRegions drive={drive} />}
+      {drive && (hasFeed || stopOnly) && <DriveRegions drive={drive} stopOnly={stopOnly} />}
 
       {/* Everything below sits above the regions (z-20), so clicking it never moves the robot. */}
       {(stream || fallbackFrameUrl || listening) && <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-pine/85 px-3 py-1.5 text-xs font-semibold text-white">
@@ -130,20 +132,13 @@ export function RobotFeed({
           }
         }}>{playbackError ? "Play audio" : muted ? "Enable audio" : "Mute audio"}</VideoTool>}
       </div>}
-      {hasFeed && drive && (
-        <div className="absolute right-3 top-3 z-20">
-          <VideoTool onSelect={() => drive.stop(true)} label="Stop the robot" className="bg-tomato text-white">
-            <Octagon className="size-4" strokeWidth={2.75} />Stop
-          </VideoTool>
-        </div>
-      )}
       <div className={localCamera ? "absolute right-4 bottom-4 z-20 w-36 overflow-hidden rounded-xl bg-pine shadow-lg ring-1 ring-white/25 sm:w-48" : "hidden"}>
         <video ref={localRef} autoPlay playsInline muted aria-label="Your camera shared with the phone" className="aspect-video w-full object-cover" />
         <p className="px-2 py-1 text-center text-xs font-semibold text-white">Your camera → phone</p>
       </div>
 
       {/* What someone near the robot just said */}
-      {heard && (
+      {heard && !drive && (
         <div className="absolute top-[14%] left-1/2 z-20 max-w-[70%] -translate-x-1/2 rounded-2xl rounded-bl-sm bg-honey px-5 py-3 text-pine shadow-[0_12px_28px_-10px_rgb(0_0_0/0.45)]">
           <p className="text-xs font-semibold opacity-70">{heardLabel}</p>
           <p className="font-display text-[clamp(1.2rem,1.8vw,1.6rem)] leading-tight font-bold">“{heard}”</p>
@@ -158,6 +153,16 @@ export function RobotFeed({
       )}
 
       </div>
+      {drive && (hasFeed || stopOnly || drive.stopState === "disarmed") && (
+        <p role="status" className="shrink-0 border-t border-white/15 px-4 py-2 text-sm font-semibold">
+          {drive.stopState === "pending" ? "Stop requested. Waiting for the phone. Select the center to retry."
+            : drive.stopState === "disarmed" ? "Phone reports driving is disarmed. Enable driving on the phone to move again."
+            : !hasFeed ? "Video unavailable. Only Stop is available."
+            : drive.active ? "Release the direction or look away to stop."
+            : drive.enabled ? "Hold a direction to move. The center stops the robot."
+            : "Waiting for drive access. Check the mounted phone’s calibration and drive session."}
+        </p>
+      )}
     </section>
   );
 }
@@ -208,9 +213,9 @@ const REGIONS: { action: DriveAction; label: string; style: React.CSSProperties 
   { action: "backward", label: "Back", style: { left: "25%", top: "70%", width: "50%", height: "30%" } },
 ];
 
-function DriveRegions({ drive }: { drive: DriveControls }) {
+function DriveRegions({ drive, stopOnly }: { drive: DriveControls; stopOnly: boolean }) {
   return <div className="absolute inset-0 z-10" aria-label="Robot drive controls">
-    {REGIONS.map(region => <DriveRegion key={region.action} {...region} drive={drive} />)}
+    {REGIONS.filter(region => !stopOnly || region.action === "stop").map(region => <DriveRegion key={region.action} {...region} drive={drive} />)}
   </div>;
 }
 
@@ -244,7 +249,7 @@ function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] &
   }, [action, isStop, start, release, stop]);
 
   return <button ref={ref} type="button" data-gaze-target="" data-gaze-dwell="900"
-    disabled={!isStop && !enabled}
+    disabled={isStop ? drive.stopState === "unavailable" || drive.stopState === "disarmed" : !enabled}
     aria-label={isStop ? "Stop driving" : `Hold to drive: ${label}`}
     onClick={isStop ? () => stop(true) : undefined}
     onPointerDown={e => {
@@ -270,8 +275,8 @@ function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] &
       drive.active === action ? "bg-honey/20" : looking ? "bg-white/15" : "enabled:hover:bg-white/10"
     }`}>
     <span className={`rounded-full px-3 py-1 font-display text-base font-bold text-white ${
-      drive.active === action ? "bg-teal" : isStop ? "bg-tomato/80" : "bg-pine/65"
-    }`}>{label}</span>
+      drive.active === action ? "bg-teal" : isStop ? "bg-tomato px-5 py-2 text-xl" : "bg-pine/65"
+    }`}>{isStop && drive.stopState === "pending" ? "Retry stop" : label}</span>
   </button>;
 }
 
@@ -281,7 +286,7 @@ function EmptyFeed({ mediaState }: { mediaState?: RobotStream["state"] }) {
       <div className="max-w-sm text-center">
         <VideoOff aria-hidden className="mx-auto mb-3 size-9 text-white/55" strokeWidth={1.5} />
         <p className="font-display text-xl font-semibold text-white/90">{mediaState === "failed" ? "Camera stream unavailable" : "Waiting for phone video"}</p>
-        <p className="mt-1 text-sm text-white/70">{mediaState === "failed" ? "Check the phone session and reconnect." : "Start the session on the mounted phone."}</p>
+        <p className="mt-1 text-sm text-white/70">{mediaState === "failed" ? "Check the phone session and reconnect." : "The camera picture appears here when the mounted phone is streaming."}</p>
       </div>
     </div>
   );

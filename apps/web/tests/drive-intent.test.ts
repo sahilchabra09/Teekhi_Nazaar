@@ -22,6 +22,32 @@ function bench() {
 }
 
 describe("phone-mediated drive", () => {
+  test("centre Stop reflects phone availability and pending stops, including after video loss", async () => {
+    const b = bench();
+    expect(b.drive.stopState).toBe("unavailable");
+    b.drive.grant(grant());
+    expect(b.drive.stopState).toBe("unavailable");
+    b.status("ready");
+    expect(b.drive.stopState).toBe("available");
+    await b.drive.start("forward");
+    b.disconnect();
+    await b.drive.tick();
+    expect(b.drive.ready).toBe(false);
+    expect(b.drive.stopState).toBe("pending");
+    b.status("disarmed", "other-session");
+    b.status("disarmed", "s1", true);
+    expect(b.drive.stopState).toBe("pending");
+    await b.drive.stop(true);
+    expect(b.messages.map(i => [i.action, i.speed])).toEqual([["forward", 35], ["stop", 0], ["stop", 0]]);
+    b.status("disarmed");
+    expect(b.drive.stopState).toBe("disarmed");
+    b.advance(2501);
+    expect(b.drive.stopState).toBe("unavailable");
+    b.status("ready");
+    b.advance(10000);
+    expect(b.drive.stopState).toBe("unavailable");
+  });
+
   test("accepted hold creates distinct signed, expiring intentions and one stop on leave", async () => {
     const { drive, messages, status, advance } = bench();
     drive.grant(grant());
@@ -122,14 +148,14 @@ describe("phone-mediated drive", () => {
     await Promise.all([b.drive.start("forward"), b.drive.stop()]);
     b.status("ready"); await b.drive.start("right"); await b.drive.tick();
     expect(b.messages.map(i => i.action)).toEqual(["stop"]);
-    expect(b.drive.stopNeedsRetry).toBe(true);
+    expect(b.drive.stopState).toBe("pending");
     b.advance(1000); await b.drive.stop(true);
     expect(b.messages.map(i => i.action)).toEqual(["stop", "stop"]);
     expect(b.messages[1]!.seq).toBeGreaterThan(b.messages[0]!.seq);
     expect(b.messages[1]!.sent_at).not.toBe(b.messages[0]!.sent_at);
     b.status("disarmed"); b.status("ready");
     await b.drive.tick();
-    expect(b.drive.stopNeedsRetry).toBe(false);
+    expect(b.drive.stopState).toBe("available");
     expect(b.messages).toHaveLength(2);
     await b.drive.start("right");
     expect(b.messages.at(-1)!.action).toBe("right");

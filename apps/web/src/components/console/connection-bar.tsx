@@ -32,7 +32,7 @@ export function ConnectionBar({ connection }: { connection: ReturnType<typeof us
     {active && <span className="text-xs font-semibold text-white/75" role="status">
       {connection.phone ? "Phone connected" : connection.status === "connected" ? "Waiting for phone" : connection.status}
     </span>}
-    <VideoTool onSelect={connect} className="bg-white text-pine">{active ? "Disconnect" : "Connect phone"}</VideoTool>
+    <VideoTool onSelect={connect} className="min-h-14! min-w-36 bg-white text-pine">{active ? "Disconnect" : "Connect phone"}</VideoTool>
     {active && connection.status === "connected" && <VideoTool onSelect={share} disabled={connection.cameraBusy} className="bg-white/15 text-white">
       {connection.cameraBusy ? "Opening camera…" : connection.camera ? "Stop sharing" : "Share camera"}
     </VideoTool>}
