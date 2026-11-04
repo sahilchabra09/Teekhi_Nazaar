@@ -1,3 +1,5 @@
+> IRIS 0.7.0 uses Deepgram streaming STT/VAD and cloud TTS by default. Configure the server-only key and follow [the current speech workflow](../../docs/speech-workflow.md). Earlier capture instructions below are historical.
+
 # IRIS Android robot app
 
 **0.6.4:** landscape uses a two-column welcome screen and a compact session header, keeping connection controls accessible and giving live video more height. Both columns scroll independently when needed for large text or small screens.

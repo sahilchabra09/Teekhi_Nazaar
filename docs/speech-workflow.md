@@ -1,3 +1,17 @@
+# Deepgram phone speech (IRIS 0.7.0)
+
+The default Android flow streams 16 kHz mono PCM through the authenticated `/api/mobile/speech` server WebSocket. Deepgram Nova-3 provides transcription and speech activity detection (`vad_events=true`); endpointing and utterance-end detection use a 1.6-second pause. Only finalized transcripts with confidence at least 0.55 enter the existing reply service. Interim results never generate replies. The console can still explicitly start, stop or cancel capture.
+
+Confirmed speech is synthesized with Deepgram Aura-2 Thalia through authenticated `POST /api/mobile/tts`, then played on the phone as 24 kHz WAV. Capture pauses during synthesis and playback and resumes after an echo settling delay. Errors are visible on the phone and reported through the existing TTS status protocol.
+
+Set `DEEPGRAM_API_KEY` only in the ignored `apps/server/.env`. Optional model overrides are `DEEPGRAM_STT_MODEL` (default `nova-3`) and `DEEPGRAM_TTS_MODEL` (default `aura-2-thalia-en`). The key is never bundled into the APK. Reply generation still requires the configured AutoSage/OpenRouter provider. Android recognition remains an explicit fallback; the default flow uses Deepgram.
+
+Restart the API, install the rebuilt APK, sign in with the same patient account as the console, and start IRIS. Check automatic speech detection, pause mid-sentence, confirm a suggested reply, and verify the phone does not transcribe its own playback. Also check cancellation, network loss, and session expiration on a real handset. Cloud audio requires a working server connection.
+
+Provider references: [Deepgram endpointing](https://developers.deepgram.com/docs/endpointing/) and [TTS WAV container](https://developers.deepgram.com/docs/tts-container).
+
+The sections below describe earlier releases and are retained as historical context.
+
 # Automatic phone speech (IRIS 0.6.2)
 
 Starting a phone session enables continuous Silero VAD. There is no Tap to talk / Tap to send button. After 256 ms of sustained detected speech, IRIS captures an utterance with preroll and ends after 1.6 seconds of silence (15-second maximum). Upload requires at least 480 ms classified as speech and a 30% voiced fraction before the trailing silence. Brief sounds and rejected clips stay on-device. Capture pauses while the server processes a clip and while IRIS speaks, preventing overlapping uploads and self-hearing.
