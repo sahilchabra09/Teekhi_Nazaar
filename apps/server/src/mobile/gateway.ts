@@ -17,6 +17,7 @@ export function createRobotGateway(options: {
   authBaseUrl: string;
   googleEnabled: boolean;
   robotOwnerId?: string;
+  talkHandler?: (request: Request) => Promise<Response>;
   validationIntervalMs?: number;
 }) {
   const pairing = new Pairing(options.resolve);
@@ -142,11 +143,46 @@ export function createRobotGateway(options: {
     }
     return c.json(grant);
   });
+  const phoneConversations = new Map<string, string>();
+  const speechBusy = new Set<string>();
+  app.use("/api/utterance*", bodyLimit({ maxSize: 5 * 1024 * 1024 + 16384 }));
   app.post("/api/utterance", async (c) => {
-    if (!await pairing.phone(c.req.raw.headers)) return c.json({ error: "Unauthorized" }, 401);
-    // Explicit failure rather than returning simulated transcripts or accepting data
-    // that no speech service can process. Android STT remains a usable fallback.
-    return c.json({ error: "Speech transcription is not configured. Enable Android STT in phone controls." }, 501);
+    const identity = await pairing.phone(c.req.raw.headers);
+    if (!identity) return c.json({ error: "Unauthorized" }, 401);
+    if (!options.talkHandler) return c.json({ error: "Speech service unavailable" }, 503);
+    const id = identity.account.user.id;
+    if (speechBusy.has(id)) return c.json({ error: "Already processing speech. Please wait." }, 409);
+    speechBusy.add(id);
+    try {
+      const form = await c.req.raw.formData();
+      const requestId = String(form.get("utterance_id") ?? "").slice(0, 128);
+      const text = form.get("text");
+      const conversationId = form.get("conversationId") || phoneConversations.get(id);
+      const headers = new Headers(identity.headers);
+      let body: string | typeof form;
+      if (typeof text === "string") {
+        headers.set("Content-Type", "application/json");
+        body = JSON.stringify({ text, confidence: Number(form.get("confidence") ?? -1), conversationId });
+      } else {
+        form.delete("conversationId");
+        if (typeof conversationId === "string") form.set("conversationId", conversationId);
+        body = form;
+      }
+      // Native bearer identity is verified above; reuse its server-held Google session.
+      // The same Talk routes enforce patient role, ownership, validation and providers.
+      const response = await options.talkHandler(new Request(new URL(typeof text === "string" ? "/api/talk/transcript" : "/api/talk/utterance", authBase).toString(), {
+        // Bun's runtime accepts the FormData returned by Request.formData(); Node's
+        // ambient undici types declare a separate, incompatible FormData class.
+        method: "POST", headers, body: body as RequestInit["body"], signal: c.req.raw.signal,
+      }));
+      const result = await response.json() as Record<string, unknown>;
+      if (!await pairing.valid(identity)) return c.json({ error: "Session expired" }, 401);
+      if (response.ok && typeof result.conversationId === "string") phoneConversations.set(id, result.conversationId);
+      send(rooms.get(id)?.get("web"), { type: "talk_result", request_id: requestId, result, ok: response.ok, ts: Date.now() });
+      return Response.json(result, { status: response.status });
+    } catch {
+      return c.json({ error: "Speech processing failed. Please try again." }, 502);
+    } finally { speechBusy.delete(id); }
   });
   const roomFor = (peer: Peer) => rooms.get(peer.data.identity.account.user.id);
   const send = (peer: Peer | undefined, message: Message) => {
@@ -229,6 +265,11 @@ export function createRobotGateway(options: {
           const message = JSON.parse(String(raw)) as Message;
           if (!message || typeof message.type !== "string" || !Number.isFinite(message.ts)) return;
           const role = peer.data.role;
+          if (role === "web" && message.type === "listen" && ["start", "stop", "cancel"].includes(String(message.action)) && typeof message.request_id === "string" && message.request_id.length <= 128) {
+            if (typeof message.conversationId === "string") phoneConversations.set(peer.data.identity.account.user.id, message.conversationId);
+            else if (message.action === "start") phoneConversations.delete(peer.data.identity.account.user.id);
+            send(room.get("phone"), { type: "listen", action: message.action, request_id: message.request_id, ts: Date.now() });
+          }
           if (role === "phone" && message.type === "hello" && message.drive_proof === "hmac-sha256-v1") {
             peer.data.driveCapable = true;
             bindDrive(room);
@@ -237,7 +278,7 @@ export function createRobotGateway(options: {
           if (role === "web" && ["media_ready", "rtc_answer", "rtc_ice", "stop"].includes(message.type)) send(room.get("phone"), message);
           if (role === "web" && message.type === "speak" && typeof message.text === "string" && message.text.trim() && message.text.length <= 4000 &&
               typeof message.speak_id === "string" && message.speak_id.length <= 128 && ["phrase", "suggestion", "system"].includes(String(message.source)) && message.audio_url == null) send(room.get("phone"), message);
-          if (role === "phone" && ["rtc_offer", "rtc_ice", "frame", "tts_status", "speech_activity", "transcript", "bump", "stop"].includes(message.type)) send(room.get("web"), message);
+          if (role === "phone" && ["rtc_offer", "rtc_ice", "frame", "tts_status", "speech_activity", "speech_state", "transcript", "bump", "stop"].includes(message.type)) send(room.get("web"), message);
         } catch { /* Malformed messages cannot interrupt another account's relay. */ }
       },
     },

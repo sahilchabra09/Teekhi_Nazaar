@@ -14,6 +14,7 @@ const gateway = createRobotGateway({
   robotOwnerId: ENV.IRIS_ROBOT_OWNER_ID,
   authBaseUrl: ENV.BETTER_AUTH_URL,
   googleEnabled: !!ENV.GOOGLE_CLIENT_ID && !!ENV.GOOGLE_CLIENT_SECRET,
+  talkHandler: async (request) => api.fetch(request),
   authHandler: (request) => auth.handler(request),
   resolve: (headers) => auth.api.getSession({ headers, query: { disableCookieCache: true, disableRefresh: true } }),
 });

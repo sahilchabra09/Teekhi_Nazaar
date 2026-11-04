@@ -7,6 +7,7 @@ import { type AuthedEnv, requireRole, requireSession } from "../rbac";
 import { isLowConfidence, models, speechToText, TalkError } from "./ai";
 import { addShownReplies, addTurn, endConversation, getConversation, lastHeard, openConversation } from "./conversations";
 import { generateReplies } from "./replies";
+import { hasAudiblePcmWav } from "./audio-quality";
 
 const MAX_AUDIO_BYTES = 5 * 1024 * 1024; // ~2.5 min of 16 kHz WAV; utterances are a few seconds
 const MIN_AUDIO_BYTES = 8 * 1024; // < ~0.25 s of 16 kHz WAV: nothing worth sending to STT
@@ -41,11 +42,15 @@ talkRoutes.post("/utterance", async (c) => {
   const t0 = performance.now();
   if (file.size < MIN_AUDIO_BYTES) return c.json(noSpeech(conversation.id, t0));
 
-  const stt = await speechToText(new Uint8Array(await file.arrayBuffer()), c.req.raw.signal);
+  const audio = new Uint8Array(await file.arrayBuffer());
+  if (hasAudiblePcmWav(audio) === false) return c.json(noSpeech(conversation.id, t0));
+  const stt = await speechToText(audio, c.req.raw.signal);
   const t1 = performance.now();
 
   // Silence or a single filler word: don't spend an LLM call, tell the UI nothing was caught.
   if (stt.text.replace(/[^\p{L}\p{N}]+/gu, "").length < 2) return c.json(noSpeech(conversation.id, t0, t1, stt.model));
+  // Do not contaminate conversation history or generate answers from unreliable words.
+  if (isLowConfidence(stt.confidence)) return c.json(noSpeech(conversation.id, t0, t1, stt.model));
 
   await addTurn(conversation.id, "heard", stt.text);
   const result = await generateReplies({
@@ -79,12 +84,13 @@ talkRoutes.post("/utterance", async (c) => {
 talkRoutes.post("/transcript", async (c) => {
   const patient = c.get("user");
   const body = z
-    .object({ text: z.string().trim().min(1).max(1000), conversationId: z.string().min(1).optional() })
+    .object({ text: z.string().trim().min(1).max(1000), confidence: z.number().min(-1).max(1).optional(), conversationId: z.string().min(1).optional() })
     .safeParse(await c.req.json().catch(() => ({})));
   if (!body.success) throw new TalkError(400, "VALIDATION_ERROR", "Send { text, conversationId? }.");
 
   const conversation = await openConversation(patient.id, body.data.conversationId ?? null);
   const t0 = performance.now();
+  if (body.data.confidence !== undefined && body.data.confidence >= 0 && isLowConfidence(body.data.confidence)) return c.json(noSpeech(conversation.id, t0));
   await addTurn(conversation.id, "heard", body.data.text);
   const result = await generateReplies({
     patient,

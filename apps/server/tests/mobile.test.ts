@@ -12,11 +12,11 @@ async function until(check: () => boolean) {
   const end = Date.now() + 2000;
   while (!check()) { if (Date.now() > end) throw new Error("Timed out waiting for relay"); await Bun.sleep(5); }
 }
-function fixture(googleEnabled = true, robotOwnerId?: string) {
+function fixture(googleEnabled = true, robotOwnerId?: string, talkHandler?: (request: Request) => Promise<Response>) {
   const sessions = new Map(["alice", "bob"].map((id) => [id, account(id)]));
   for (const id of ["alice", "bob"]) sessions.set(`mobile-${id}`, { ...account(id), session: { ...account(id).session, id: `mobile-session-${id}` } });
   const callbacks = new Map<string, URL>();
-  const server = Bun.serve({ ...createRobotGateway({ origin, robotOwnerId, validationIntervalMs: 20,
+  const server = Bun.serve({ ...createRobotGateway({ origin, robotOwnerId, talkHandler, validationIntervalMs: 20,
     authBaseUrl: "http://localhost:3000", googleEnabled,
     resolve: async (headers) => sessions.get(headers.get("cookie") ?? "") ?? null,
     authHandler: async (request) => {
@@ -69,6 +69,43 @@ function fixture(googleEnabled = true, robotOwnerId?: string) {
   return { server, sessions, base, api, signIn, socket, begin };
 }
 
+test("phone audio and Android transcripts share Talk routes and return replies only to their account", async () => {
+  const calls: { path: string; cookie: string; text?: string; audio?: number }[] = [];
+  const f = fixture(true, undefined, async (request) => {
+    const path = new URL(request.url).pathname;
+    const text = path.endsWith("transcript") ? (await request.json() as {text:string}).text : undefined;
+    const audio = text === undefined ? ((await request.formData()).get("audio") as File).size : undefined;
+    calls.push({ path, cookie: request.headers.get("cookie")!, text, audio });
+    return Response.json({ status: "ok", conversationId: "alice-conversation", heard: "Would you like water?", replies: ["Yes please", "No thanks", "Later please"], lowConfidence: false });
+  });
+  const phone = await f.signIn("alice");
+  const aw = await f.socket("web", "alice"), bw = await f.socket("web", "bob");
+  const ap = await f.socket("phone", phone.token);
+  aw.ws.send(JSON.stringify({type:"listen", action:"start", request_id:"capture-1", ts:Date.now()}));
+  await until(() => ap.messages.some(m => m.type === "listen"));
+  expect(ap.messages.find(m => m.type === "listen")?.request_id).toBe("capture-1");
+  const form = new FormData(); form.set("utterance_id", "capture-1");
+  form.set("audio", new File([new Uint8Array(16000)], "speech.wav", {type:"audio/wav"}));
+  expect((await fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body:form})).status).toBe(200);
+  await until(() => aw.messages.some(m => m.type === "talk_result"));
+  expect(calls[0]).toEqual({path:"/api/talk/utterance", cookie:"mobile-alice", audio:16000, text:undefined});
+  expect(bw.messages.some(m => m.type === "talk_result")).toBe(false);
+  const transcript = new FormData(); transcript.set("text", "Would you like water?"); transcript.set("utterance_id", "capture-2");
+  expect((await fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body:transcript})).status).toBe(200);
+  expect(calls[1]?.path).toBe("/api/talk/transcript");
+  expect(calls[1]?.text).toBe("Would you like water?");
+  expect((await fetch(f.base + "/api/utterance", {method:"POST", body:new FormData()})).status).toBe(401);
+});
+
+test("mobile speech preserves provider errors and never reports successful replies", async () => {
+  const f = fixture(true, undefined, async () => Response.json({error:"AI_NOT_CONFIGURED", message:"Configure speech provider"}, {status:503}));
+  const phone = await f.signIn("alice"), web = await f.socket("web", "alice");
+  const body = new FormData(); body.set("text", "hello"); body.set("utterance_id", "failed-capture");
+  expect((await fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body})).status).toBe(503);
+  await until(() => web.messages.some(m => m.type === "talk_result"));
+  expect(web.messages.find(m => m.type === "talk_result")?.ok).toBe(false);
+});
+
 test("manual-code routes are removed; socket tickets require a signed-in browser and trusted origin", async () => {
   const f = fixture();
   expect((await f.api("/api/mobile/link-code", undefined, {})).status).toBe(404);
@@ -101,7 +138,7 @@ test("Google returns to the APK, PKCE is required, and the exchange cannot be re
   const me = await (await f.api("/api/mobile/me", undefined, undefined, linked.token)).json() as { user: { id: string } };
   expect(me.user.id).toBe("alice");
   expect((await f.api("/api/mobile/session", undefined, undefined, linked.token)).status).toBe(501);
-  expect((await f.api("/api/utterance", undefined, {}, linked.token)).status).toBe(501);
+  expect((await f.api("/api/utterance", undefined, {}, linked.token)).status).toBe(503);
 });
 
 test("media and confirmed speech are isolated by the authenticated account, including spoofed user IDs", async () => {
