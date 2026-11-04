@@ -15,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import android.content.res.Configuration
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
@@ -47,19 +49,20 @@ import androidx.compose.ui.viewinterop.AndroidView
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
         IrisHeader({ settings = true }, enabled = !state.authBusy)
         state.error?.let { Notice(it, clearError) }
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Column(Modifier.widthIn(max = 480.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 28.dp),
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                Box(Modifier.size(88.dp).clay(Clay.Sky, 28), contentAlignment = Alignment.Center) {
+        val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val intro: @Composable () -> Unit = {
+                Box(Modifier.size(if (landscape) 64.dp else 88.dp).clay(Clay.Sky, 28), contentAlignment = Alignment.Center) {
                     IrisSymbol(Symbol.Laptop, Modifier.size(38.dp))
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(if (signedIn) "Ready to connect" else "Welcome to IRIS", style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
+                    Text(if (signedIn) "Ready to connect" else "Welcome to IRIS", style = if (landscape) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
                     if (!signedIn) Text("Sign in with the same Google account as your laptop.", style = MaterialTheme.typography.bodyLarge,
                         color = Clay.Soft, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
                 }
+        }
+        val actions: @Composable () -> Unit = {
                 if (signedIn) AccountSummary(initial.accountEmail)
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(if (landscape) 8.dp else 12.dp)) {
                     if (signedIn) ClayButton(onClick = { start(draft) }, enabled = !state.authBusy, modifier = Modifier.fillMaxWidth()) {
                         if (state.authBusy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
                         Text(if (state.authBusy) "Connecting…" else "Start session", Modifier.padding(horizontal = 10.dp).weight(1f), textAlign = TextAlign.Center)
@@ -78,7 +81,7 @@ import androidx.compose.ui.viewinterop.AndroidView
                 }
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Clay.Surface.copy(alpha = .65f))
                     .clickable(enabled = !state.authBusy, role = Role.Button) { settings = true }.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(if (landscape) 8.dp else 12.dp)) {
                     IrisSymbol(Symbol.Laptop, tint = Clay.Soft)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text("Laptop connection", style = MaterialTheme.typography.labelLarge)
@@ -88,6 +91,21 @@ import androidx.compose.ui.viewinterop.AndroidView
                 }
                 if (signedIn) Text("Your camera and microphone turn on when the session starts.", style = MaterialTheme.typography.bodySmall,
                     color = Clay.Soft, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 12.dp))
+        }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            if (landscape && maxWidth >= 540.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(.85f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)) { intro() }
+                    Column(Modifier.weight(1.15f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) { actions() }
+                }
+            } else {
+                Column(Modifier.align(Alignment.Center).widthIn(max = 480.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    intro()
+                    actions()
+                }
             }
         }
     }
@@ -129,6 +147,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 @Composable private fun SessionScreen(state: RobotUiState, model: RobotViewModel) {
     var settings by remember { mutableStateOf(false) }
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val status = when {
         !state.hub -> "Offline"
         !state.web -> "Standby"
@@ -136,13 +155,38 @@ import androidx.compose.ui.viewinterop.AndroidView
         else -> "Connected"
     }
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp).padding(top = 10.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        verticalArrangement = Arrangement.spacedBy(if (landscape) 8.dp else 16.dp)) {
         IrisHeader({ settings = true }, stop = if (state.robot != null) model::stopRobot else null)
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        if (!landscape) Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Laptop camera", style = MaterialTheme.typography.labelLarge, color = Clay.Soft)
             StatusPill(status, state.frontendVideoLive)
         }
-        Box(Modifier.weight(1f).fillMaxWidth().clay(radius = 28).padding(7.dp)) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            if (landscape && maxWidth >= 540.dp) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    SessionVideo(state, Modifier.weight(1.6f).fillMaxHeight())
+                    Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text("Laptop camera", style = MaterialTheme.typography.labelMedium, color = Clay.Soft)
+                            StatusPill(status, state.frontendVideoLive)
+                        }
+                        SessionSpeech(state) { settings = true }
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    SessionVideo(state, Modifier.weight(1f).fillMaxWidth())
+                    SessionSpeech(state) { settings = true }
+                }
+            }
+        }
+    }
+    if (settings) SessionSettings(state, model) { settings = false }
+}
+
+@Composable private fun SessionVideo(state: RobotUiState, modifier: Modifier = Modifier) {
+    Box(modifier.clay(radius = 28).padding(7.dp)) {
             Box(Modifier.fillMaxSize().clip(RoundedCornerShape(22.dp)).background(Clay.Pine)) {
                 val track = state.remoteTrack
                 val egl = state.eglContext
@@ -158,6 +202,9 @@ import androidx.compose.ui.viewinterop.AndroidView
                 if (!state.frontendVideoLive) CameraWaiting(state)
             }
         }
+}
+
+@Composable private fun SessionSpeech(state: RobotUiState, openSettings: () -> Unit) {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Clay.Surface).padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -171,14 +218,12 @@ import androidx.compose.ui.viewinterop.AndroidView
             }
             if (state.caption.isNotBlank()) Text(state.caption, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
-        if (state.error != null) TextButton(onClick = { settings = true }, modifier = Modifier.fillMaxWidth()) { Text("View session notice", color = Clay.Tomato) }
-        ClayButton(onClick = model::tap, enabled = !state.speaking && state.sttReady, tone = Clay.Honey, modifier = Modifier.fillMaxWidth()) {
-            IrisSymbol(if (state.speaking) Symbol.Speaker else Symbol.Mic)
-            Spacer(Modifier.width(10.dp))
-            Text(if (state.speaking) "Speaking…" else if (state.activeSpeech) "Tap to send" else "Tap to talk")
-        }
-    }
-    if (settings) SessionSettings(state, model) { settings = false }
+        if (state.error != null) TextButton(onClick = openSettings, modifier = Modifier.fillMaxWidth()) { Text("View session notice", color = Clay.Tomato) }
+        Text(if (state.speaking) "Listening pauses while IRIS speaks."
+            else if (state.listening == "Processing speech") "Processing your speech..."
+            else "Speak naturally. IRIS detects speech and sends it after you pause.",
+            style = MaterialTheme.typography.bodyMedium, color = Clay.Soft,
+            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(12.dp))
 }
 
 @Composable private fun CameraWaiting(state: RobotUiState) {

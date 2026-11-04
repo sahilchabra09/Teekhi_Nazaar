@@ -11,8 +11,8 @@ android {
         applicationId = "com.iris.robot"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 10
+        versionName = "0.6.4"
     }
     buildFeatures { compose = true }
     compileOptions {
