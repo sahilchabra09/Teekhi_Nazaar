@@ -10,6 +10,7 @@ export interface Identity {
   credential?: string;
 }
 type Timed<T> = T & { expires: number };
+const MOBILE_ACCOUNT_TTL_MS = 7 * 24 * 60 * 60_000;
 const hash = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const secret = () => crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
 
@@ -55,7 +56,7 @@ export class Pairing {
     const token = secret();
     const credential = hash(token);
     const identity: Identity = { ...account, credential,
-      expires: Math.min(this.now() + 24 * 60 * 60_000, account.account.session.expiresAt.getTime()) };
+      expires: Math.min(this.now() + MOBILE_ACCOUNT_TTL_MS, account.account.session.expiresAt.getTime()) };
     // Replace credentials issued from the same mobile browser session.
     for (const [key, value] of this.devices) if (value.account.session.id === identity.account.session.id) this.devices.delete(key);
     this.devices.set(credential, identity);

@@ -69,6 +69,27 @@ function fixture(googleEnabled = true, robotOwnerId?: string, talkHandler?: (req
   return { server, sessions, base, api, signIn, socket, begin };
 }
 
+test("the same mobile bearer reconnects up to seven days, bounded by its parent session", async () => {
+  const day = 86_400_000;
+  const issuedAt = Date.UTC(2026, 0, 1);
+  for (const parentDays of [2, 10]) {
+    let now = issuedAt;
+    const parent = account("alice");
+    parent.session.expiresAt = new Date(issuedAt + parentDays * day);
+    const pairing = new Pairing(async () => parent, () => now);
+    const linked = pairing.issue((await pairing.browser(cookie("alice")))!);
+    const headers = new Headers({ Authorization: `Bearer ${linked.token}` });
+    const expires = issuedAt + Math.min(7, parentDays) * day;
+    expect(linked.expires_at_ms).toBe(expires);
+    now += day + 1;
+    expect((await pairing.phone(headers))?.expires).toBe(expires);
+    now = expires - 1;
+    expect((await pairing.phone(headers))?.expires).toBe(expires);
+    now = expires;
+    expect(await pairing.phone(headers)).toBeNull();
+  }
+});
+
 test("losing and replacing the phone transport preserves its original account token and expiry", async () => {
   const f = fixture();
   const { token } = await f.signIn("alice");
