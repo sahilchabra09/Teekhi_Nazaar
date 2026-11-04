@@ -1,3 +1,5 @@
+export const GAZE_DWELL_MS = 1200;
+
 export type ScreenSample = { x: number; y: number; time: number };
 
 function contains(area: DOMRect, x: number, y: number) {
@@ -30,26 +32,27 @@ export class ScreenDwell {
     if (this.blockedArea && !contains(this.blockedArea, x, y)) this.blockedArea = null;
     if (element !== this.current) {
       this.leave();
-      if (!element || this.blockedArea) return;
+      if (!element || this.blockedArea) return 0;
       if (element.dataset.gazeRequireEntry !== undefined) {
         const area = element.getBoundingClientRect();
         // A call or reply may have replaced the card already under the eye.
         if (contains(area, previousX, previousY)) {
           this.blockedArea = area;
-          return;
+          return 0;
         }
       }
       this.current = element;
       this.since = frame;
       element.dispatchEvent(new Event("gaze:enter"));
     }
-    if (!element || this.accepted || !element.isConnected) return;
-    const dwell = Number(element.dataset.gazeDwell) || 900;
+    if (!element || this.accepted || !element.isConnected) return 0;
+    const dwell = Number(element.dataset.gazeDwell) || GAZE_DWELL_MS;
     const progress = Math.min(1, (frame - this.since) / dwell);
     element.dispatchEvent(new CustomEvent("gaze:progress", { detail: { progress } }));
-    if (progress < 1) return;
+    if (progress < 1) return progress;
     this.accepted = true;
     this.blockedArea = element.getBoundingClientRect();
     element.dispatchEvent(new Event("gaze:select"));
+    return 1;
   }
 }

@@ -504,13 +504,13 @@ export default function Console({ userName, appliancePassword }: { userName: str
   const phrasesOpen = view.name === "phrases";
   const communicateCard: PanelAction = {
     kind: "action", key: "talk", title: "Communicate", icon: MessageSquareText, tone: "honey",
-    pressed: inCommunication,
+    pressed: inCommunication, previewNavigation: !inCall,
     hint: inCommunication ? "Select again for main actions" : "Choose a phrase or listen and reply",
     onSelect: inCommunication ? goHome : () => setView({ name: "communicate" }),
   };
   const driveCard: PanelAction = {
     kind: "action", key: "drive", title: "Drive", icon: Navigation, tone: "teal",
-    pressed: view.name === "drive",
+    pressed: view.name === "drive", previewNavigation: !inCall && ["home", "drive", "listen"].includes(view.name) && !pendingId,
     hint: view.name === "drive" ? "Select again for main actions" : hasFeed ? "Open directional controls" : "Connect the phone to drive",
     onSelect: () => leaveConversation(view.name === "drive" ? "home" : "drive"),
   };
@@ -526,7 +526,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
         communicateCard,
         {
           kind: "action",
-          key: "appliances",
+          key: "appliances", previewNavigation: true,
           title: "Appliances",
           hint: "Switch things on and off",
           icon: Lightbulb,
@@ -540,14 +540,14 @@ export default function Console({ userName, appliancePassword }: { userName: str
     case "phrases":
       heading = phrasesOpen ? "Quick phrases" : "Communicate";
       cards = [
-        { kind: "action", key: "phrases", title: "Quick phrases", pressed: phrasesOpen,
+        { kind: "action", key: "phrases", title: "Quick phrases", previewNavigation: true, pressed: phrasesOpen,
           hint: phrasesOpen ? "Select again to close phrases" : "Choose words to speak", icon: MessageSquareText, tone: "sky",
           onSelect: () => setView({ name: phrasesOpen ? "communicate" : "phrases" }) },
         communicateCard,
-        { kind: "action", key: "listen", title: "Listen and reply", hint: "Listen to someone and choose a reply", icon: Ear, tone: "teal", onSelect: () => setView({ name: "listen" }) },
+        { kind: "action", key: "listen", title: "Listen and reply", previewNavigation: true, hint: "Listen to someone and choose a reply", icon: Ear, tone: "teal", onSelect: () => setView({ name: "listen" }) },
       ];
       if (phrasesOpen) options = QUICK_PHRASES.map((text, i) => ({
-        kind: "action", key: text, title: text, tone: TONES[i]!, onSelect: () => confirm(text, view),
+        kind: "action", key: text, title: text, previewNavigation: true, tone: TONES[i]!, onSelect: () => confirm(text, view),
       }));
       break;
 
@@ -558,7 +558,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
         : { kind: "action", key: "local", title: "Use laptop microphone", hint: "Record one turn on this device", tone: "teal", onSelect: () => void startLocalListening() },
         pendingId
           ? { kind: "action", key: "decline", title: "Decline", tone: "plain", onSelect: () => clearPhoneTurn(true) }
-          : { kind: "action", key: "close", title: "Close listening", tone: "plain", onSelect: goHome }];
+          : { kind: "action", key: "close", title: "Close listening", previewNavigation: !pendingId, tone: "plain", onSelect: goHome }];
       break;
 
     case "call":
@@ -568,22 +568,22 @@ export default function Console({ userName, appliancePassword }: { userName: str
       const fromVisitor = view.name === "call" && currentReply;
       const texts = fromVisitor ? (currentReply.lowConfidence ? ["Sorry, could you repeat that?"] : currentReply.replies) : QUICK_PHRASES;
       cards = texts.map((text, i) => ({ kind: "action", key: JSON.stringify([fromVisitor ? currentReply.turnId : "phrase", i, text]),
-        title: text, tone: TONES[i % TONES.length]!, requireEntry: Boolean(fromVisitor),
+        title: text, previewNavigation: true, tone: TONES[i % TONES.length]!, requireEntry: Boolean(fromVisitor),
         onSelect: () => confirm(text, view, fromVisitor ? currentReply.lowConfidence ? "system" : "suggestion" : "phrase") }));
-      options = [driveCard, { kind: "action", key: "call-menu", title: view.name === "call-phrases" ? "Return to call" : "Message options",
+      options = [driveCard, { kind: "action", key: "call-menu", previewNavigation: true, title: view.name === "call-phrases" ? "Return to call" : "Message options",
         hint: conversation.callReplies.length > 1 ? `${conversation.callReplies.length - 1} more waiting` : undefined,
         tone: "sky", onSelect: () => setView({ name: view.name === "call-phrases" ? "call" : "call-menu" }) }, endCall];
       break;
     }
     case "call-menu":
       heading = "Message options";
-      cards = [{ kind: "action", key: "phrases", title: "Quick phrases", tone: "honey", onSelect: () => setView({ name: "call-phrases" }) }];
+      cards = [{ kind: "action", key: "phrases", title: "Quick phrases", previewNavigation: true, tone: "honey", onSelect: () => setView({ name: "call-phrases" }) }];
       if (currentReply) {
         cards.push({ kind: "action", key: "more", title: "New replies", tone: "sky", onSelect: () => void moreCallReplies() },
           { kind: "action", key: "skip", title: conversation.callReplies.length > 1 ? "Next message" : "Dismiss message",
             tone: "plain", onSelect: () => dispatch({ type: "skip-reply" }) });
       }
-      options = [driveCard, { kind: "action", key: "return", title: "Return to call", tone: "sky", onSelect: () => setView({ name: "call" }) }, endCall];
+      options = [driveCard, { kind: "action", key: "return", title: "Return to call", previewNavigation: true, tone: "sky", onSelect: () => setView({ name: "call" }) }, endCall];
       break;
 
     case "listening":
@@ -644,7 +644,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
           onSelect: () => void toggleAppliance(pin),
         } satisfies PanelCard;
       });
-      cards.push({ kind: "action", key: "back", title: "Back to actions", icon: ArrowLeft, tone: "honey", onSelect: () => setView(home) });
+      cards.push({ kind: "action", key: "back", title: "Back to actions", previewNavigation: true, icon: ArrowLeft, tone: "honey", onSelect: () => setView(home) });
       break;
 
     case "suggestions": {
@@ -664,7 +664,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
       cards = view.replies.map((r, i) => ({
         kind: "action",
         key: r,
-        title: r,
+        title: r, previewNavigation: true,
         tone: TONES[i % TONES.length]!,
         onSelect: () => confirm(r, view, "suggestion"),
       }));
@@ -676,7 +676,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
       cards = [
         { kind: "preview", key: "preview", text: `“${view.text}”` },
         { kind: "action", key: "speak", title: "Speak it", icon: Volume2, tone: "honey", onSelect: () => void speak(view.text, view.source) },
-        { kind: "action", key: "cancel", title: "Cancel", icon: X, tone: "plain", onSelect: () => setView(view.from) },
+        { kind: "action", key: "cancel", title: "Cancel", icon: X, tone: "plain", previewNavigation: true, onSelect: () => setView(view.from) },
       ];
       break;
 

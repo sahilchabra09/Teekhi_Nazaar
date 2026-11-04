@@ -25,13 +25,15 @@ export function ScreenGazeControls({ mode, setMode }: {
   setMode: (mode: PatientMode) => void;
 }) {
   const [tracking, setTracking] = useState(false);
+  const [demoPreview, setDemoPreview] = useState(false);
+  const [protectedTarget, setProtectedTarget] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const cursor = useRef<HTMLDivElement>(null);
   const latest = useRef<ScreenSample | null>(null);
   const onSample = useCallback((sample: ScreenSample | null) => { latest.current = sample; }, []);
   const openSetup = useCallback(() => setMode("setup"), [setMode]);
   const close = useCallback(() => setMode("manual"), [setMode]);
-  const preview = useCallback(() => setMode("preview"), [setMode]);
+  const preview = useCallback((demo: boolean) => { setDemoPreview(demo); setMode("preview"); }, [setMode]);
   const useTracking = useCallback(() => setMode("live"), [setMode]);
   const setup = useDwell(openSetup);
   const [dwell] = useState(() => new ScreenDwell());
@@ -42,10 +44,16 @@ export function ScreenGazeControls({ mode, setMode }: {
     if (mode === "manual" || mode === "welcome") return;
 
     const point = cursor.current;
+    const ring = point?.querySelector<SVGCircleElement>("circle");
+    let blocked = false;
+    const markProtected = (next: boolean) => {
+      if (blocked !== next) { blocked = next; setProtectedTarget(next); }
+    };
     let raf = 0;
     let focused = document.hasFocus();
     let acceptAfter = performance.now();
     const hide = () => {
+      markProtected(false);
       if (point && !point.hidden) {
         point.hidden = true;
         setTracking(false);
@@ -74,18 +82,20 @@ export function ScreenGazeControls({ mode, setMode }: {
           point.style.left = x + "px";
           point.style.top = y + "px";
         }
-        // Preview only draws the cursor. Only a verified gaze can enter or activate a target.
-        if (mode !== "preview") {
-          const selector = mode === "setup" ? "[data-gaze-continue]" : "[data-gaze-target]";
-          const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>(selector);
-          dwell.update(hit && !hit.matches(":disabled,[aria-disabled=true]") ? hit : null, x, y, sample.time);
-        }
+        const selector = mode === "setup" ? "[data-gaze-continue]" : "[data-gaze-target]";
+        const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>(selector);
+        const restricted = mode === "preview" && !!hit && !hit.hasAttribute("data-gaze-preview");
+        markProtected(restricted);
+        const target = hit && !restricted && !hit.matches(":disabled,[aria-disabled=true]") ? hit : null;
+        const progress = dwell.update(target, x, y, sample.time);
+        ring?.setAttribute("stroke-dashoffset", String(1 - progress));
       } else {
         hide();
       }
       raf = requestAnimationFrame(tick);
     };
     setTracking(false);
+    setProtectedTarget(false);
     raf = requestAnimationFrame(tick);
     window.addEventListener("blur", blur);
     window.addEventListener("focus", focus);
@@ -105,10 +115,11 @@ export function ScreenGazeControls({ mode, setMode }: {
   return <>
     <span role="status" className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-pine-soft">
       <span aria-hidden className={`size-2 rounded-full ${active && tracking ? "bg-teal" : "bg-pine/30"}`} />
-      {mode === "preview" ? tracking ? "Gaze preview · selection off" : "Finding gaze · preview only"
+      {mode === "preview" ? protectedTarget ? "Check accuracy to use this control"
+        : demoPreview ? "Demo preview · navigation" : tracking ? "Gaze preview · navigation" : "Finding gaze · preview"
         : active ? tracking ? "Gaze active" : "Finding gaze" : "Gaze off"}
     </span>
-    <button ref={setup.ref} {...setup.props} type="button" aria-haspopup="dialog" aria-expanded={mode === "setup"}
+    <button ref={setup.ref} {...setup.props} data-gaze-preview="" type="button" aria-haspopup="dialog" aria-expanded={mode === "setup"}
       className="patient-tool">
       <span className="dwell-fill" /><ScanEye aria-hidden className="relative size-5" /><span className="relative">Setup</span>
     </button>
@@ -118,7 +129,11 @@ export function ScreenGazeControls({ mode, setMode }: {
           maxHeight: "none", margin: 0, padding: 0, border: 0 }}>
         <Workspace mode={mode} onSetupRequired={openSetup} onSample={onSample} onUse={useTracking} onPreview={preview} onClose={close}/>
       </dialog>
-      {dashboardCursor && <div hidden aria-hidden ref={cursor} className="pointer-events-none fixed z-50 size-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-teal bg-white/40 shadow-sm" />}
+      {dashboardCursor && <div hidden aria-hidden ref={cursor} className="pointer-events-none fixed z-50 size-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-teal bg-white/40 shadow-sm">
+        <svg viewBox="0 0 32 32" className="absolute -inset-1.5 size-9 -rotate-90 overflow-visible" fill="none">
+          <circle cx="16" cy="16" r="14" pathLength="1" stroke="#f4b23e" strokeWidth="4" strokeDasharray="1" strokeDashoffset="1" />
+        </svg>
+      </div>}
     </>, document.body)}
   </>;
 }

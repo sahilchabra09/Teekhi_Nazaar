@@ -353,8 +353,9 @@ export function EyeTrackingWorkspace({
     offset
   )
   const onscreen = screenPoint && screenPoint.every((v) => v >= 0 && v <= 1)
+  const demoSource = source?.kind === "sample" || source?.kind === "video"
   const verified = !!calibration && validation !== null && settings.locked && !!source &&
-    tracker.connection === "live" && source.kind !== "sample" && source.kind !== "video" &&
+    tracker.connection === "live" && !demoSource &&
     !capture && !fitting && step === 5
   const showHandoff = step === 5 && !capture && !focus && !dashboardOpen
   const canContinueWithGaze = showHandoff && verified
@@ -725,9 +726,9 @@ export function EyeTrackingWorkspace({
               <p id="dashboard-handoff-description" className="mt-1 text-pine-soft">
                 {verified
                   ? "Look at the button for a moment, or click it to open your dashboard."
-                  : source?.kind === "sample" || source?.kind === "video"
-                    ? "Preview the cursor with this source. To select with gaze, connect a live eye camera and pass the accuracy check."
-                    : "Your eye camera stays on in preview. Use touch or a mouse to select, or check accuracy to turn on gaze selection."}
+                  : demoSource
+                    ? "Try the dashboard with this demo input. Hold the cursor on Communicate for 1.2 seconds to open it."
+                    : "Your eye camera stays on in preview. Look at Communicate for 1.2 seconds to open it. Check accuracy to send messages or control the robot."}
               </p>
             </div>
             {!verified && source?.kind !== "sample" && source?.kind !== "video" && (
@@ -740,7 +741,7 @@ export function EyeTrackingWorkspace({
               type="button"
               aria-describedby="dashboard-handoff-description"
               ref={dashboard.ref}
-              {...(canContinueWithGaze ? dashboard.props : { onClick: onPreview })}
+              {...(canContinueWithGaze ? dashboard.props : { onClick: () => onPreview(demoSource) })}
               data-gaze-continue={canContinueWithGaze ? "" : undefined}
               className="relative flex min-h-16 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-2xl bg-pine px-6 text-lg font-bold text-white"
             >

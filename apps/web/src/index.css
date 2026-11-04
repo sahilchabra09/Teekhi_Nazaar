@@ -159,14 +159,6 @@
     translate: 0 -14px;
   }
 }
-@keyframes dwell-fill {
-  from {
-    clip-path: inset(100% 0 0 0 round 0);
-  }
-  to {
-    clip-path: inset(0 0 0 0 round 0);
-  }
-}
 @keyframes speak-bar {
   0%,
   100% {
@@ -192,17 +184,19 @@
   animation-delay: var(--delay, 0ms), calc(var(--delay, 0ms) + 900ms);
 }
 
-/* gaze / mouse dwell progress: honey fill rising inside a target */
+/* The tracker advances the fill only when a new measured gaze frame arrives. */
 .dwell-fill {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: rgb(255 255 255 / 0.32);
+  border-top: 3px solid var(--honey);
+  background: rgb(125 187 178 / 0.35);
   pointer-events: none;
-  clip-path: inset(100% 0 0 0);
+  transform-origin: bottom;
+  transform: scaleY(0);
 }
 [data-dwelling="true"] > .dwell-fill {
-  animation: dwell-fill var(--dwell-ms, 900ms) linear forwards;
+  transform: scaleY(var(--gaze-progress, 0));
 }
 
 @media (prefers-reduced-motion: reduce) {

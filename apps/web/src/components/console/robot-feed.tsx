@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { ReactNode } from "react";
 import { VideoTool } from "./connection-bar";
+import { GAZE_DWELL_MS } from "@/lib/gaze/dwell";
 import type { DriveAction, Direction, DriveSource, StopState } from "@/lib/mqtt/robot";
 import type { RobotStream } from "@/lib/rtc";
 
@@ -248,7 +249,7 @@ function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] &
     };
   }, [action, isStop, start, release, stop]);
 
-  return <button ref={ref} type="button" data-gaze-target="" data-gaze-dwell="900"
+  return <button ref={ref} type="button" data-gaze-target="" data-gaze-dwell={GAZE_DWELL_MS}
     disabled={isStop ? drive.stopState === "unavailable" || drive.stopState === "disarmed" : !enabled}
     aria-label={isStop ? "Stop driving" : `Hold to drive: ${label}`}
     onClick={isStop ? () => stop(true) : undefined}

@@ -53,3 +53,16 @@ test("ordinary card replacements can still start a new dwell at the same positio
   for (let t = 100; t <= 1100; t += 100) dwell.update(replacement.target, 50, 50, t);
   expect(replacement.events).toEqual(["enter", "select"]);
 });
+
+test("the default gaze hold reports measured progress and selects at 1.2 seconds", () => {
+  const dwell = new ScreenDwell(), action = button();
+  delete action.target.dataset.gazeDwell;
+  const progress: number[] = [];
+  action.target.addEventListener("gaze:progress", event => progress.push((event as CustomEvent).detail.progress));
+  for (const t of [0, 300, 600, 900, 1199]) dwell.update(action.target, 50, 50, t);
+  expect(action.events).toEqual(["enter"]);
+  expect(progress[2]).toBe(0.5);
+  dwell.update(action.target, 50, 50, 1200);
+  expect(action.events).toEqual(["enter", "select"]);
+  expect(progress.at(-1)).toBe(1);
+});

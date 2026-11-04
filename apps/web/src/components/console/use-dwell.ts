@@ -1,11 +1,12 @@
 "use client";
 
+import { GAZE_DWELL_MS } from "@/lib/gaze/dwell";
 import { useEffect, useRef, useState } from "react";
 
 /** Screen 1 owns dwell timing. Keyboard and deliberate clicks also activate a card. */
 export function useDwell<T extends HTMLElement = HTMLButtonElement>(
   onSelect: () => void,
-  { ms = 900, disabled = false }: { ms?: number; disabled?: boolean } = {},
+  { ms = GAZE_DWELL_MS, disabled = false }: { ms?: number; disabled?: boolean } = {},
 ) {
   const ref = useRef<T>(null);
   const [dwelling, setDwelling] = useState(false);
@@ -13,14 +14,17 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
     const el = ref.current;
     if (!el || disabled) return;
     const enter = () => setDwelling(true);
-    const leave = () => setDwelling(false);
+    const leave = () => { el.style.removeProperty("--gaze-progress"); setDwelling(false); };
+    const progress = (event: Event) => el.style.setProperty("--gaze-progress", String((event as CustomEvent<{progress: number}>).detail.progress));
     const select = () => { leave(); onSelect(); };
     el.addEventListener("gaze:enter", enter);
     el.addEventListener("gaze:leave", leave);
+    el.addEventListener("gaze:progress", progress);
     el.addEventListener("gaze:select", select);
     return () => {
       el.removeEventListener("gaze:enter", enter);
       el.removeEventListener("gaze:leave", leave);
+      el.removeEventListener("gaze:progress", progress);
       el.removeEventListener("gaze:select", select);
     };
   }, [onSelect, disabled]);
@@ -29,7 +33,6 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
     "data-gaze-dwell": ms,
     "data-dwelling": !disabled && dwelling,
     "aria-disabled": disabled || undefined,
-    style: { "--dwell-ms": ms + "ms" } as React.CSSProperties,
     onClick: disabled ? undefined : onSelect,
   } };
 }
