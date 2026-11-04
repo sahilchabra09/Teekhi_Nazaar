@@ -41,6 +41,69 @@ class DriveControllerTest {
         assertFalse(c.accept(intent(3, "F", epoch + 100).copy(action = "forward"), false, 1100))
     }
 
+    @Test fun `signed patient console gaze commands yield the expected wheels and legacy stop disarms`() {
+        // Captured from the production TypeScript DrivePublisher at the fixed grant time and test key.
+        // Keep the browser's millisecond ISO timestamp and signature verbatim.
+        data class Sample(val action: String, val proof: String, val wheels: DriveOutput)
+        val samples = listOf(
+            Sample("forward", "095771b4195979a6c3d5affaebd088fa385f8cc0aa99dd2c0945fb2be3732f1d", DriveOutput(35, 35, true, "F")),
+            Sample("backward", "b3468448111215844444276cde9c7c61821149ff37c2525ae02e9769de436c67", DriveOutput(-35, -35, true, "B")),
+            Sample("left", "e31dfedf036c2dfd6248af3bc42bae99fb3f5122184a94aa81a56241a94a533e", DriveOutput(-38, 38, true, "L")),
+            Sample("right", "863a7cd7a38edb1619e358ab5a948fe9487da06c9573b072d6955b438c72f0ad", DriveOutput(38, -38, true, "R")),
+        )
+        fun wire(number: Int, action: String, proof: String, seq: Int, speed: Int): DriveIntent {
+            val commandId = "00000000-0000-4000-8000-" + number.toString().padStart(12, '0')
+            return Protocol.json.decodeFromString<DriveIntent>("""{"type":"drive_intent","device_id":"esp12e_carbot","control_session_id":"session-a","command_id":"$commandId","seq":$seq,"action":"$action","speed":$speed,"sent_at":"2023-11-14T22:13:20.000Z","ttl_ms":300,"signature":"$proof"}""")
+        }
+        val legacyStop = wire(5, "stop", "f5ee823de8694287b700c53e839da85b0fd9d7ecdd4a4b7006ed21ed8190b02b", seq = 2, speed = 0)
+        for ((index, sample) in samples.withIndex()) {
+            val controller = ready()
+            assertTrue(controller.accept(wire(index + 1, sample.action, sample.proof, seq = 1, speed = 35), false, 1000))
+            assertEquals(sample.wheels, controller.tick(1000))
+            assertTrue(controller.accept(legacyStop, false, 1000))
+            assertEquals(DriveOutput(), controller.tick(1000))
+            assertFalse(controller.enabled)
+        }
+    }
+
+    private fun neutral(seq: Long, sent: Long) = intent(seq, "neutral", sent).copy(speed = 0).signed()
+
+    @Test fun `neutral stops and acknowledges readiness for the next direction`() {
+        val c = ready()
+        assertTrue(c.accept(intent(), false, 1000))
+        assertFalse(c.accept(intent(2, "neutral", epoch + 100), false, 1100)) // nonzero neutral
+        assertFalse(c.accept(neutral(2, epoch + 100).copy(signature = ""), false, 1100))
+        assertFalse(c.accept(neutral(2, epoch + 100), true, 1100))
+        assertTrue(c.output.armed)
+        assertTrue(c.accept(neutral(2, epoch + 100), false, 1100))
+        assertEquals(DriveOutput(), c.tick(1100))
+        assertEquals("ready", c.status(1100).state)
+        assertEquals("cmd-2", c.status(1100).last_command_id)
+        assertTrue(c.status(1100).supports_neutral)
+        assertFalse(c.accept(neutral(2, epoch + 100), false, 1100))
+        c.updatePose(Pose(0.0, 0.0, 0.0, 0.0, 2100))
+        assertTrue(c.accept(neutral(3, epoch + 1100), false, 2100))
+        assertEquals(DriveOutput(), c.tick(2100))
+        assertEquals("cmd-3", c.status(2100).last_command_id)
+        assertTrue(c.accept(intent(4, "right", epoch + 1100), false, 2100))
+        assertEquals("R", c.output.cmd)
+    }
+
+    @Test fun `neutral cannot rescue expired motion or reenable a stopped controller`() {
+        val c = ready()
+        assertTrue(c.accept(intent(), false, 1000))
+        c.updatePose(Pose(0.0, 0.0, 0.0, 0.0, 1400))
+        c.accept(neutral(2, epoch + 400), false, 1400)
+        assertFalse(c.enabled)
+        assertEquals(DriveOutput(), c.output)
+        assertTrue(c.enable(1400))
+        assertTrue(c.accept(intent(3, "stop", epoch + 400), false, 1400))
+        c.accept(neutral(4, epoch + 400), false, 1400)
+        assertFalse(c.enabled)
+        c.backendConnectivity(false)
+        assertFalse(c.accept(neutral(5, epoch + 400), false, 1400))
+    }
+
     @Test fun `camera steps use reported angle stop wheels and resist repeated or expired frames`() {
         val c = ready()
         c.espSeen(1000, 172)
@@ -109,6 +172,18 @@ class DriveControllerTest {
         assertFalse(c.accept(intent(seq = 0), false, 1250))
         assertEquals(DriveOutput(), c.tick(1300)); assertFalse(c.enabled)
     }
+    @Test fun `fresh movement after a missed watchdog tick cannot revive an expired hold`() {
+        val c = ready()
+        assertTrue(c.accept(intent(), false, 1000))
+        c.updatePose(Pose(0.0, 0.0, 0.0, 0.0, 1400))
+        // A delayed main loop delivers the new MQTT message before its next periodic tick.
+        assertFalse(c.accept(intent(2, "forward", epoch + 400), false, 1400))
+        assertEquals(DriveOutput(), c.output)
+        assertFalse(c.enabled)
+        assertTrue(c.enable(1400))
+        assertTrue(c.accept(intent(3, "forward", epoch + 400), false, 1400))
+    }
+
     @Test fun `retained misaddressed wrong-session expired future and excessive-TTL movement are rejected`() {
         val c = ready()
         assertFalse(c.accept(intent(), true, 1000))

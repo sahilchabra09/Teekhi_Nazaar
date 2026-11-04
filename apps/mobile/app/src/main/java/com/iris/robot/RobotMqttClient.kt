@@ -42,7 +42,14 @@ class RobotMqttClient(
                         if (closed || !online) return@launch
                         if (topic == intentTopic) {
                             val intent = runCatching { Protocol.json.decodeFromString<DriveIntent>(raw) }.getOrNull() ?: return@launch
-                            if (controller.accept(intent, message.isRetained, SystemClock.elapsedRealtime()) && !controller.enabled) stopOutput()
+                            val now = SystemClock.elapsedRealtime()
+                            val wasEnabled = controller.enabled
+                            val accepted = controller.accept(intent, message.isRetained, now)
+                            val neutral = accepted && intent.action == "neutral"
+                            if (neutral || (!controller.enabled && (accepted || wasEnabled))) {
+                                stopOutput()
+                                publishStatus(controller.status(now), now, 1)
+                            }
                         } else if (topic == "carbot/status" && !message.isRetained) {
                             val status = runCatching { Protocol.json.decodeFromString<EspStatus>(raw) }.getOrNull() ?: return@launch
                             // Minimal online and malformed/other-device status do not satisfy readiness.
@@ -72,8 +79,7 @@ class RobotMqttClient(
                     }
                     val status = controller.status(now)
                     if (now - lastStatus >= 1000 || status.state != lastState) {
-                        publish(intentTopic, Protocol.json.encodeToString(status), 0)
-                        lastStatus = now; lastState = status.state
+                        publishStatus(status, now, 0)
                     }
                 }
                 lastOutput = output
@@ -116,6 +122,11 @@ class RobotMqttClient(
             withContext(Dispatchers.IO) { runCatching { if (client?.isConnected == true) client?.disconnectForcibly(0, 0, false) } }
             connect()
         }
+    }
+    private fun publishStatus(status: MobileStatus, now: Long, qos: Int) {
+        publish(intentTopic, Protocol.json.encodeToString(status), qos)
+        lastStatus = now
+        lastState = status.state
     }
     private fun publishOutput(output: DriveOutput, qos: Int) {
         val pose = controller.pose

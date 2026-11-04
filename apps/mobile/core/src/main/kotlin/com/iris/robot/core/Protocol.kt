@@ -134,4 +134,5 @@ data class SessionRevoked(val device_id: String, val control_session_id: String,
     val left: Int,
     val right: Int,
     val type: String = "mobile_status",
+    val supports_neutral: Boolean = true,
 )

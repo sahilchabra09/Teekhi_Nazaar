@@ -103,7 +103,7 @@ This timestamp is an example; a publisher supplies the current time for each new
 
 Mobile validation checks schema, target, active session, ordering, and expiry. The phone obtains the active session grant from an authenticated backend flow; a Topic 1 message cannot grant itself ownership. The backend must authenticate the controller; neither a topic name nor a claimed session ID proves identity. Publisher and phone clocks need a bounded offset for `sent_at` checks, established against a trusted clock during session setup. Also expire the active intention using a local monotonic timer. Do not rely on local arrival time alone to identify an old queued command.
 
-A controller sends a new intention about every 100 ms while a movement is held, with a new ID, sequence number, and timestamp. Releasing a control sends `action:"stop"` immediately. If the same direction continues, repeated intentions renew freshness without resetting the phone's heading target. STOP or speed zero always commands zero motor output.
+A controller sends a new intention about every 100 ms while a movement is held, with a new ID, sequence number, and timestamp. Releasing a control sends signed `neutral` with speed 0 when the phone advertises `supports_neutral:true`. The wheels stop and the phone acknowledges ready for another direction. Older phones receive `stop`. Leaving Drive sends a disarming stop. If the same direction continues, repeated intentions renew freshness without resetting the phone's heading target. STOP or speed zero always commands zero motor output.
 
 ### Topic 2 for commands the ESP already understands
 
@@ -278,7 +278,7 @@ Frontend/backend implement the proposed MQTT Topic 1 schema and agree one active
 
 Before enabling real driving, the integration should demonstrate:
 
-- Forward/backward produce the correct wheel signs; left/right turn in the intended direction; release/STOP immediately sets zero output and disarms.
+- Forward/backward produce the correct wheel signs; left/right turn in the intended direction; release and center set zero output; leaving Drive or a fault disarms.
 - A small heading disturbance is corrected during both forward and reverse driving. Repeated held intentions preserve the heading target; deliberate turns do not fight an old heading target.
 - Expired, duplicate, incorrectly targeted, and unauthorized intentions never start or extend movement. Status messages on Topic 1 never reach the movement translator.
 - Loss of Topic 1 freshness stops the phone's drive loop even if MQTT remains connected. Phone disconnection stops through the existing ESP timeout when its loop is running.

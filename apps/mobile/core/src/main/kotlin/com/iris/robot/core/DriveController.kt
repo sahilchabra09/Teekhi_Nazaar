@@ -122,6 +122,7 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
             "U", "up" -> "U"
             "D", "down" -> "D"
             "S", "stop" -> "S"
+            "neutral" -> if (value.speed == 0) "neutral" else return false
             else -> return false
         }
         val g = grant ?: return false
@@ -140,8 +141,23 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
         commandIds.add(value.command_id)
         if (commandIds.size > 256) commandIds.remove(commandIds.first())
         lastCommandId = value.command_id
-        if (code == "S" || value.speed == 0) { disarm("Controller stopped"); return true }
-        if (!enabled || readiness(now) != null) { disarm(readiness(now) ?: "Enable required"); return false }
+        if (code == "S" || (value.speed == 0 && code != "neutral")) { disarm("Controller stopped"); return true }
+        // A fresh packet can reach the main thread before a delayed watchdog tick.
+        if (command != null && now >= intentExpires) {
+            disarm("Intention expired")
+            return code == "neutral"
+        }
+        val fault = readiness(now)
+        if (!enabled || fault != null) {
+            disarm(fault ?: reason)
+            return code == "neutral"
+        }
+        if (code == "neutral") {
+            command = null
+            output = DriveOutput()
+            reason = "Ready; waiting for fresh intention"
+            return true
+        }
         if (command != code) targetHeading = pose!!.heading
         command = code
         requestedSpeed = value.speed
