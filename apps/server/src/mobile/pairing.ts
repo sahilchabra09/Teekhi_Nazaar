@@ -1,5 +1,5 @@
 export interface AccountSession {
-  user: { id: string; email: string; name: string };
+  user: { id: string; email: string; name: string; role?: string | null };
   session: { id: string; expiresAt: Date };
 }
 export type SessionResolver = (headers: Headers) => Promise<AccountSession | null>;
@@ -38,10 +38,15 @@ export class Pairing {
   current(identity: Identity): boolean {
     return identity.expires > this.now() && (!identity.credential || this.devices.get(identity.credential) === identity);
   }
+  async session(identity: Identity): Promise<AccountSession | null> {
+    if (!this.current(identity)) return null;
+    const session = await this.resolve(identity.headers);
+    if (!session || !this.current(identity) || session.session.expiresAt.getTime() <= this.now() ||
+        session.user.id !== identity.account.user.id || session.session.id !== identity.account.session.id) return null;
+    return session;
+  }
   async valid(identity: Identity): Promise<boolean> {
-    if (!this.current(identity)) return false;
-    const current = await this.resolve(identity.headers);
-    return this.current(identity) && !!current && current.session.expiresAt.getTime() > this.now() && current.user.id === identity.account.user.id && current.session.id === identity.account.session.id;
+    return !!await this.session(identity) && this.current(identity);
   }
   allowAttempt(ip: string) {
     this.sweep();

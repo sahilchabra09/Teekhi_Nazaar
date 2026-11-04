@@ -2,7 +2,7 @@
 
 ## Main frontend console
 
-The authenticated console at `/` uses `useRobotConnection` and the shared `createApplicationHub` adapter. Its main feed is the phone's video/audio, with a separate local-webcam preview sent to the phone. It consumes `speech_activity`, `transcript`, `suggestions`, and matching `tts_status`; speaking completes on the phone's result, not a simulated timer. New suggestions queue while a reply is being confirmed/spoken. A replacement connection stops the previous browser from automatically stealing the single web role back.
+The authenticated console at `/` uses `useRobotConnection` and the shared `createApplicationHub` adapter. Its main feed is the phone's video/audio, with a separate local-webcam preview sent to the phone. Incoming microphone requests stay on the listening page. One approval permits a matching capture and its result. Speech playback completes on the matching `tts_status`. A replacement connection stops the previous browser from automatically stealing the single web role back.
 
 `NEXT_PUBLIC_SERVER_URL` points to the **same** Better Auth and media API (normally port 3000). The independent media URL override has been removed. On the phone, use that server's LAN IP or HTTPS hostname. See the [first-run instructions](../README.md#first-run).
 
@@ -33,7 +33,7 @@ Current implementation and remaining service integration:
 | Route | Phone behavior | Backend behavior required |
 | --- | --- | --- |
 | `GET /ws?role=phone` | Authenticated `hello`; jittered 0.5–30 second reconnect for temporary failures | Implemented: authenticated upgrade, one peer per account/role, initial and updated `peer_status` |
-| `POST /api/utterance` | Authenticated multipart WAV in `audio`, ID in `utterance_id`, length in `duration_ms` | Returns the shared Talk JSON/status and sends `talk_result` (`request_id`, `ok`, `result`, `ts`) to the same account's console. Android recognition sends multipart `text` and `confidence` through this route instead of WAV. |
+| `POST /api/utterance` | Authenticated multipart WAV in `audio`, ID in `utterance_id`, length in `duration_ms` | Requires an approved matching utterance and sends `talk_result` (`request_id`, `ok`, `result`, `ts`) to the same account's console. Android recognition sends multipart `text` and `confidence` through this route instead of WAV. |
 
 Kotlin sealed-message discriminator is exactly `type`; every modeled message includes epoch-millisecond `ts`. Unknown/malformed message types are ignored. Phone messages are implemented in `core/.../Protocol.kt`.
 

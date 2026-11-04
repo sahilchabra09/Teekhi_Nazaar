@@ -4,7 +4,7 @@ import { Pairing, type AccountSession } from "../src/mobile/pairing";
 import { MobileOAuth, pkceChallenge } from "../src/mobile/oauth";
 
 const origin = "http://localhost:3001";
-const account = (id: string): AccountSession => ({ user: { id, email: `${id}@example.invalid`, name: id }, session: { id: `session-${id}`, expiresAt: new Date(Date.now() + 3_600_000) } });
+const account = (id: string): AccountSession => ({ user: { id, email: `${id}@example.invalid`, name: id, role: "patient" }, session: { id: `session-${id}`, expiresAt: new Date(Date.now() + 3_600_000) } });
 const cookie = (id: string) => new Headers({ cookie: id });
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -12,12 +12,13 @@ async function until(check: () => boolean) {
   const end = Date.now() + 2000;
   while (!check()) { if (Date.now() > end) throw new Error("Timed out waiting for relay"); await Bun.sleep(5); }
 }
-function fixture(googleEnabled = true, robotOwnerId?: string, talkHandler?: (request: Request) => Promise<Response>) {
+function fixture(googleEnabled = true, robotOwnerId?: string, talkHandler?: (request: Request) => Promise<Response>, connectSpeech?: () => WebSocket) {
   const sessions = new Map(["alice", "bob"].map((id) => [id, account(id)]));
   for (const id of ["alice", "bob"]) sessions.set(`mobile-${id}`, { ...account(id), session: { ...account(id).session, id: `mobile-session-${id}` } });
   const callbacks = new Map<string, URL>();
   const server = Bun.serve({ ...createRobotGateway({ origin, robotOwnerId, talkHandler, validationIntervalMs: 20,
-    authBaseUrl: "http://localhost:3000", googleEnabled,
+    authBaseUrl: "http://localhost:3000", googleEnabled, connectSpeech,
+    speech: connectSpeech ? { apiKey: "test", sttModel: "test", ttsModel: "test" } : undefined,
     resolve: async (headers) => sessions.get(headers.get("cookie") ?? "") ?? null,
     authHandler: async (request) => {
       const body = await request.json() as { provider: string; callbackURL: string; errorCallbackURL: string };
@@ -112,6 +113,16 @@ test("losing and replacing the phone transport preserves its original account to
   expect((await f.api("/api/mobile/me", undefined, undefined, token)).status).toBe(401);
 });
 
+type TestPeer = Awaited<ReturnType<ReturnType<typeof fixture>["socket"]>>;
+const listen = (peer: TestPeer, action: string, id: string) => peer.ws.send(JSON.stringify({ type: "listen", action, request_id: id, ts: Date.now() }));
+const gotListen = (peer: TestPeer, action: string, id: string) => peer.messages.some(m => m.type === "listen" && m.action === action && m.request_id === id);
+async function approve(phone: TestPeer, web: TestPeer, id: string) {
+  listen(phone, "request", id);
+  await until(() => gotListen(web, "request", id));
+  listen(web, "start", id);
+  await until(() => gotListen(phone, "start", id));
+}
+
 test("phone audio and Android transcripts share Talk routes and return replies only to their account", async () => {
   const calls: { path: string; cookie: string; text?: string; audio?: number }[] = [];
   const f = fixture(true, undefined, async (request) => {
@@ -124,17 +135,22 @@ test("phone audio and Android transcripts share Talk routes and return replies o
   const phone = await f.signIn("alice");
   const aw = await f.socket("web", "alice"), bw = await f.socket("web", "bob");
   const ap = await f.socket("phone", phone.token);
-  aw.ws.send(JSON.stringify({type:"listen", action:"start", request_id:"capture-1", ts:Date.now()}));
-  await until(() => ap.messages.some(m => m.type === "listen"));
-  expect(ap.messages.find(m => m.type === "listen")?.request_id).toBe("capture-1");
+  await approve(ap, aw, "capture-1");
   const form = new FormData(); form.set("utterance_id", "capture-1");
   form.set("audio", new File([new Uint8Array(16000)], "speech.wav", {type:"audio/wav"}));
-  expect((await fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body:form})).status).toBe(200);
+  const uploaded = await fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body:form});
+  expect(uploaded.status).toBe(200);
+  expect(await uploaded.text()).not.toContain("Yes please");
   await until(() => aw.messages.some(m => m.type === "talk_result"));
-  expect(calls[0]).toEqual({path:"/api/talk/utterance", cookie:"mobile-alice", audio:16000, text:undefined});
+  expect(calls[0]).toEqual({path:"/api/talk/utterance", cookie:"alice", audio:16000, text:undefined});
   expect(bw.messages.some(m => m.type === "talk_result")).toBe(false);
   const transcript = new FormData(); transcript.set("text", "Would you like water?"); transcript.set("utterance_id", "capture-2");
+  const upload = () => fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body:transcript});
+  expect((await upload()).status).toBe(403);
+  await approve(ap, aw, "capture-2");
   expect((await fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body:transcript})).status).toBe(200);
+  expect((await upload()).status).toBe(403);
+  expect(calls).toHaveLength(2);
   expect(calls[1]?.path).toBe("/api/talk/transcript");
   expect(calls[1]?.text).toBe("Would you like water?");
   expect((await fetch(f.base + "/api/utterance", {method:"POST", body:new FormData()})).status).toBe(401);
@@ -143,10 +159,130 @@ test("phone audio and Android transcripts share Talk routes and return replies o
 test("mobile speech preserves provider errors and never reports successful replies", async () => {
   const f = fixture(true, undefined, async () => Response.json({error:"AI_NOT_CONFIGURED", message:"Configure speech provider"}, {status:503}));
   const phone = await f.signIn("alice"), web = await f.socket("web", "alice");
+  await approve(await f.socket("phone", phone.token), web, "failed-capture");
   const body = new FormData(); body.set("text", "hello"); body.set("utterance_id", "failed-capture");
   expect((await fetch(f.base + "/api/utterance", {method:"POST", headers:{Authorization:`Bearer ${phone.token}`}, body})).status).toBe(503);
   await until(() => web.messages.some(m => m.type === "talk_result"));
   expect(web.messages.find(m => m.type === "talk_result")?.ok).toBe(false);
+});
+
+test("requests are isolated by account and need a live patient decision each time", async () => {
+  const calls: string[] = [];
+  const f = fixture(true, undefined, async () => { calls.push("talk"); return Response.json({}); });
+  const { token } = await f.signIn("alice"), bob = await f.signIn("bob");
+  const phone = await f.socket("phone", token), web = await f.socket("web", "alice"), otherWeb = await f.socket("web", "bob");
+  const upload = (id: string, bearer = token) => {
+    const body = new FormData(); body.set("text", "hello"); body.set("utterance_id", id);
+    return fetch(f.base + "/api/utterance", { method: "POST", headers: { authorization: "Bearer " + bearer }, body });
+  };
+  listen(web, "start", "unsolicited");
+  expect((await upload("unsolicited")).status).toBe(403);
+  listen(phone, "request", "first");
+  await until(() => gotListen(web, "request", "first"));
+  expect(gotListen(otherWeb, "request", "first")).toBe(false);
+  listen(otherWeb, "start", "first");
+  expect((await upload("first")).status).toBe(403);
+  listen(web, "cancel", "first");
+  await until(() => gotListen(phone, "cancel", "first"));
+  listen(web, "start", "first");
+  expect((await upload("first")).status).toBe(403);
+
+  listen(phone, "request", "role-changed");
+  await until(() => gotListen(web, "request", "role-changed"));
+  f.sessions.get("alice")!.user.role = "doctor";
+  listen(web, "start", "role-changed");
+  await until(() => gotListen(phone, "cancel", "role-changed"));
+  expect((await upload("role-changed")).status).toBe(403);
+  listen(phone, "request", "doctor");
+  await until(() => gotListen(phone, "cancel", "doctor"));
+  expect(gotListen(web, "request", "doctor")).toBe(false);
+  f.sessions.get("alice")!.user.role = "patient";
+  await approve(phone, web, "allowed");
+  expect((await upload("allowed", bob.token)).status).toBe(403);
+  expect((await upload("another")).status).toBe(403);
+  listen(phone, "stop", "allowed");
+  await until(() => gotListen(web, "stop", "allowed"));
+  expect((await upload("allowed")).status).toBe(200);
+  listen(phone, "request", "allowed");
+  await until(() => gotListen(phone, "cancel", "allowed"));
+  expect(calls).toHaveLength(1);
+});
+
+test("a role change cancels an approved turn while the live account retains media pairing", async () => {
+  const f = fixture(true, undefined, async () => Response.json({}));
+  const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  await approve(phone, web, "role-change");
+  f.sessions.get("alice")!.user.role = "doctor";
+  await until(() => gotListen(phone, "cancel", "role-change"));
+  phone.ws.send(JSON.stringify({ type: "rtc_offer", sdp: "still paired", ts: Date.now() }));
+  await until(() => web.messages.some(m => m.type === "rtc_offer" && m.sdp === "still paired"));
+});
+
+test("replacing the approving web peer suppresses an in-flight transcript and its response", async () => {
+  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const f = fixture(true, undefined, async () => { started.resolve(); await release.promise; return Response.json({ heard: "private" }); });
+  const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  await approve(phone, web, "in-flight");
+  const body = new FormData(); body.set("utterance_id", "in-flight"); body.set("text", "hello");
+  const upload = fetch(f.base + "/api/utterance", { method: "POST", headers: { authorization: "Bearer " + token }, body });
+  await started.promise;
+  const replacement = await f.socket("web", "alice");
+  await until(() => gotListen(phone, "cancel", "in-flight"));
+  release.resolve();
+  const response = await upload;
+  expect(response.status).toBe(403);
+  expect(await response.text()).not.toContain("private");
+  expect(replacement.messages.some(m => m.type === "talk_result")).toBe(false);
+});
+
+test("streaming requires the granted ID and stops accepting PCM after one final transcript", async () => {
+  const received: (string | Buffer)[] = [];
+  const provider = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, {status: 400}); },
+    websocket: { message(ws, message) {
+      received.push(message);
+      if (typeof message === "string" && JSON.parse(message).type === "Finalize") ws.send(JSON.stringify({
+        type: "Results", is_final: true, from_finalize: true, channel: { alternatives: [{ transcript: "hello", confidence: .9 }] },
+      }));
+    } },
+  });
+  cleanups.push(() => provider.stop(true));
+  const f = fixture(true, undefined, async () => Response.json({ status: "ok", heard: "hello" }), () => new WebSocket(`ws://127.0.0.1:${provider.port}`));
+  const { token } = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  const headers = { authorization: "Bearer " + token };
+  expect((await fetch(f.base + "/api/mobile/speech", { headers })).status).toBe(403);
+  await approve(phone, web, "stream");
+  const stream = new WebSocket(f.base.replace("http:", "ws:") + "/api/mobile/speech", { headers });
+  await until(() => stream.readyState === WebSocket.OPEN);
+  const pcm = new Uint8Array(100);
+  stream.send(JSON.stringify({ action: "resume" })); stream.send(pcm);
+  stream.send(JSON.stringify({ action: "start", request_id: "guessed" })); stream.send(pcm);
+  stream.send(JSON.stringify({ action: "start", request_id: "stream" })); stream.send(pcm);
+  await until(() => received.length > 0);
+  expect(received).toHaveLength(1);
+  stream.send(JSON.stringify({ action: "stop", request_id: "stream" })); stream.send(pcm);
+  await until(() => web.messages.some(m => m.type === "talk_result" && m.request_id === "stream"));
+  expect(received.filter(m => typeof m !== "string")).toHaveLength(1);
+  expect(web.messages.filter(m => m.type === "talk_result")).toHaveLength(1);
+  expect((await fetch(f.base + "/api/mobile/speech", { headers })).status).toBe(403);
+});
+
+test("pending and active approvals expire even when their timer callback is delayed", async () => {
+  const f = fixture(true, undefined, async () => Response.json({}));
+  const {token} = await f.signIn("alice"), phone = await f.socket("phone", token), web = await f.socket("web", "alice");
+  listen(phone, "request", "pending");
+  await until(() => gotListen(web, "request", "pending"));
+  try {
+    setSystemTime(new Date(Date.now() + 60_001));
+    listen(web, "start", "pending");
+    await until(() => gotListen(phone, "cancel", "pending"));
+    await approve(phone, web, "active");
+    setSystemTime(new Date(Date.now() + 100_001));
+    const body = new FormData(); body.set("utterance_id", "active"); body.set("text", "late");
+    expect((await fetch(f.base + "/api/utterance", { method: "POST", headers: { authorization: "Bearer " + token }, body })).status).toBe(403);
+    await until(() => gotListen(web, "cancel", "active"));
+  } finally { setSystemTime(); }
 });
 
 test("manual-code routes are removed; socket tickets require a signed-in browser and trusted origin", async () => {
