@@ -29,9 +29,8 @@ class Motion(
     private var lastSend = 0L
     private var lastBump = -2000L
     private var restUp: DoubleArray? = null
-    private var restHeading = 0.0
-    private var restPitch = 0.0
-    private var restRoll = 0.0
+    private val angles = MountedAngles()
+    private var lastPoseAt = 0L
     val available get() = rotation != null && gyro != null
     fun start() {
         rotation?.let { manager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
@@ -43,16 +42,18 @@ class Motion(
         if (!hasRotation || now - rotationAt > 250 || now - gyroAt > 250) return false
         // A flat phone has no stable forward projection. Require an upright mount.
         if (hypot(matrix[2].toDouble(), matrix[5].toDouble()) < 0.5 || matrix[7] < 0.5 || abs(yawRate) > 5 || accel > 1.5) return false
+        val zero = angles.calibrate(now) ?: return false
         restUp = doubleArrayOf(matrix[6].toDouble(), matrix[7].toDouble(), matrix[8].toDouble())
-        restHeading = heading; restPitch = pitch; restRoll = roll
+        pose(zero)
         return true
     }
     override fun onSensorChanged(event: SensorEvent) {
         val now = SystemClock.elapsedRealtime()
+        val sampledAt = event.timestamp / 1_000_000L
         when (event.sensor.type) {
             Sensor.TYPE_ROTATION_VECTOR -> {
                 SensorManager.getRotationMatrixFromVector(matrix, event.values)
-                hasRotation = true; rotationAt = now
+                hasRotation = true; rotationAt = sampledAt
                 heading = Math.toDegrees(atan2(matrix[2].toDouble(), matrix[5].toDouble()))
                 pitch = Math.toDegrees(atan2(matrix[8].toDouble(), matrix[7].toDouble()))
                 roll = Math.toDegrees(atan2(matrix[6].toDouble(), matrix[7].toDouble()))
@@ -63,7 +64,7 @@ class Motion(
                 }
             }
             Sensor.TYPE_GYROSCOPE -> {
-                gyroAt = now
+                gyroAt = sampledAt
                 if (hasRotation) yawRate = -Math.toDegrees((matrix[6] * event.values[0] + matrix[7] * event.values[1] + matrix[8] * event.values[2]).toDouble())
             }
             Sensor.TYPE_LINEAR_ACCELERATION -> {
@@ -71,11 +72,15 @@ class Motion(
                 if (accel > 15) trigger("impact", accel, now)
             }
         }
-        if (hasRotation && gyroAt > 0 && now - lastSend >= 100) {
+        val at = minOf(rotationAt, gyroAt)
+        if (!hasRotation || at - lastPoseAt < 50 || now - at !in 0..250) return
+        lastPoseAt = at
+        val raw = Pose(heading, pitch, roll, yawRate, at)
+        val upright = hypot(matrix[2].toDouble(), matrix[5].toDouble()) >= 0.5 && matrix[7] >= 0.5
+        val value = angles.observe(raw, upright && abs(yawRate) <= 5 && accel <= 1.5)
+        pose(value)
+        if (now - lastSend >= 100) {
             lastSend = now
-            val value = Pose(DriveController.angle(heading - restHeading), DriveController.angle(pitch - restPitch),
-                DriveController.angle(roll - restRoll), yawRate, minOf(rotationAt, gyroAt))
-            pose(value)
             send(MotionMessage(value.heading, value.pitch, value.roll, accel))
         }
     }
