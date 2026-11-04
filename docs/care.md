@@ -149,7 +149,7 @@ The nurse example: *"How are you? What were the results of your current report?"
 | Conversation | `conversation` row. Starts on the first utterance after the patient opens **Say something** |
 | AutoSage chat | Created on the conversation's first reply request (`POST /chats`, `agent_mode: "quick"`, `external_subject_id` = patient id, **chat id = conversation id**). **Every** later utterance and reply of that conversation is sent with that `chat_id`, so the whole exchange lives in one chat |
 | What goes in | Each turn's query carries what was heard and anything the patient said since the last query (`conversation_turn.sent_to_autosage` tracks this) |
-| Ends when | The patient leaves conversation mode (**Ignore**, **Cancel**, back to home), via `POST /api/talk/conversations/:id/end`, or after **10 min** of silence. The next *Say something* opens a new conversation and a new chat |
+| Ends when | The patient leaves conversation mode (**Ignore**, **Cancel**, back to home) via `POST /api/talk/conversations/:id/end`; after **90 s** of silence; or when, after **15 s** of quiet, the new line sounds like someone new starting (a greeting or introduction; see talk.md §6c). The next utterance opens a new conversation and a new chat |
 | Local copy | `conversation_turn` keeps heard/spoken turns (also used as context by the OpenRouter fallback) |
 
 ---

@@ -194,6 +194,19 @@ The console now has the phone pairing bar from the Android companion (docs/mobil
 
 Hub suggestions that are low-confidence show the phone flow's "Could you repeat that?" cards. Talk replies stay pickable, because AutoSage already phrases unsure replies as clarifying questions, and they get a **New replies** pill.
 
+## 6c. New person, new conversation
+
+How the phone's audio reaches the server and the console (`POST /api/utterance` → the same `/api/talk/utterance` route → `talk_result` over the hub) is described in [speech-workflow.md](./speech-workflow.md). This section covers how those utterances are grouped into conversations.
+
+IRIS can't tell voices apart (speech-to-text gives words, not speakers), so `apps/server/src/talk/turn-taking.ts` decides **after** transcription, in both `/api/talk/utterance` and `/api/talk/transcript`:
+
+- **Silence ≥ 90 s** since the last turn → new conversation and new AutoSage chat (`newConversation: "silence"`).
+- **Opener after ≥ 15 s of quiet**: "hi/hello/hey/namaste/good morning…", "excuse me…", or an introduction in the first words ("I'm Ravi…", "my name is…", "this is Dr. Mehta") → new conversation (`newConversation: "greeting"`). "I'm fine / I'm not sure…" don't count.
+- **Prompt guard** for anything that slips through: the prompt tells AutoSage the speaker may be someone new, and if a line could be a fresh start it must not bring up earlier topics, medicines or results unless asked.
+- **No words, no conversation:** silent, filler-only or low-confidence clips return `no_speech` before a conversation is opened, so noise can't end the current one. Their `conversationId` is the one sent in (it can be `null`).
+- **Console:** a result with `newConversation` set shows a toast ("New conversation: sounds like someone new" / "…after a long pause"), and the caption reads **"Someone new said"**. This works for both phone results (`talk_result`) and laptop recordings. The patient can still end a conversation any time.
+- **Verified live (2026-11-04):** A asks about baclofen → B, 16 s later, says "Hello! I'm Ravi…" (new chat, replies greet Ravi) → B: "Is it any better?" (same chat, no medicine talk from A's chat) → 95 s quiet then "Can you hear me?" (new chat). Unit tests: `apps/server/tests/turn-taking.test.ts`.
+
 ## 7. Moving to the robot phone
 
 The server pipeline doesn't change. Only who records and who speaks:

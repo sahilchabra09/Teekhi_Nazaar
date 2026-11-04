@@ -51,6 +51,13 @@ export default function Console({ userName }: { userName: string }) {
 
   const setView = useCallback((next: View) => dispatch({ type: "navigate", view: next }), []);
   const confirm = (text: string, from: View, source: ReplySource = "phrase") => setView({ name: "confirm", text, source, from });
+  /** Set when the server started a new conversation (long silence / someone new greeting). */
+  const [newSpeaker, setNewSpeaker] = useState<"silence" | "greeting" | null>(null);
+  const announceSwitch = useCallback((reason: unknown) => {
+    const r = reason === "silence" || reason === "greeting" ? reason : null;
+    setNewSpeaker(r);
+    if (r) toast(r === "greeting" ? "New conversation: sounds like someone new" : "New conversation after a long pause");
+  }, []);
 
   useEffect(() => setMicId(readSavedMic()), []);
 
@@ -198,6 +205,8 @@ export default function Console({ userName }: { userName: string }) {
       if (phoneCapture.current && phoneCapture.current.id !== message.request_id) return;
       finishCapture();
       const result = message.result as import("@/lib/talk/api").UtteranceResult;
+      // No words caught: the server doesn't open a conversation for that, so there may be no id.
+      if (message.ok && result?.status === "no_speech") { setView({ name: "no-speech" }); return; }
       if (!message.ok || !result || typeof result.conversationId !== "string") {
         const failure = message.result as { message?: string; error?: string };
         toast.error(failure?.message ?? failure?.error ?? "Speech processing failed. Try again.");
@@ -205,6 +214,7 @@ export default function Console({ userName }: { userName: string }) {
       }
       conversationId.current = result.conversationId;
       if (result.status === "no_speech") { setView({ name: "no-speech" }); return; }
+      announceSwitch(result.newConversation);
       dispatch({ type: "event", message: { type: "suggestions", utterance_id: result.conversationId,
         heard: result.heard, suggestions: result.replies, low_confidence: result.lowConfidence,
         requires_user_confirmation: true, ts: Date.now() } });
@@ -219,7 +229,7 @@ export default function Console({ userName }: { userName: string }) {
       }
     });
     return () => { offResult(); offState(); };
-  }, [connection.hub, setView]);
+  }, [announceSwitch, connection.hub, setView]);
   useEffect(() => {
     if (!connection.phone && phoneCapture.current) { abortWork(); setView({ name: "no-speech" }); }
   }, [connection.phone, abortWork, setView]);
@@ -229,6 +239,7 @@ export default function Console({ userName }: { userName: string }) {
     const id = conversationId.current;
     conversationId.current = null;
     resumeListening.current = false;
+    setNewSpeaker(null);
     if (id) void talkApi.endConversation(id).catch(() => {});
   }, []);
 
@@ -291,9 +302,10 @@ export default function Console({ userName }: { userName: string }) {
       request.current = controller;
       const result = await talkApi.utterance(recording.wav, conversationId.current, controller.signal);
       request.current = null;
-      conversationId.current = result.conversationId;
+      conversationId.current = result.conversationId ?? conversationId.current;
 
       if (result.status === "no_speech") return setView({ name: "no-speech" });
+      announceSwitch(result.newConversation);
       console.info(`[talk] heard in ${result.timings.sttMs} ms, replies (${result.source}) in ${result.timings.repliesMs} ms`, result.models);
       setView({
         name: "suggestions",
@@ -305,7 +317,7 @@ export default function Console({ userName }: { userName: string }) {
     } catch (error) {
       showError(error);
     }
-  }, [abortWork, micId, setView, showError, connection.phone, connection.hub, connection.status]);
+  }, [abortWork, announceSwitch, micId, setView, showError, connection.phone, connection.hub, connection.status]);
 
   const moreReplies = useCallback(
     async (heard: string) => {
@@ -574,7 +586,13 @@ export default function Console({ userName }: { userName: string }) {
             mediaState={connection.media.state}
             drive={{ enabled: ready || active !== null, active, start, release, stop, frame, lostFeed }}
             heard={heard}
-            heardLabel={view.name === "suggestions" && view.lowConfidence ? "I think they said" : "Someone nearby said"}
+            heardLabel={
+              view.name === "suggestions" && view.lowConfidence
+                ? "I think they said"
+                : newSpeaker === "greeting"
+                  ? "Someone new said"
+                  : "Someone nearby said"
+            }
             status={feedStatus}
             listening={conversation.activeSpeech || (view.name === "listening" && view.speaking)}
             onPreviewWebcam={() => void connection.openCamera()}

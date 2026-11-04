@@ -4,6 +4,8 @@ export type UtteranceResult =
   | {
       status: "ok";
       conversationId: string;
+      /** Set when this utterance started a new conversation: long silence, or it sounded like someone new. */
+      newConversation: "silence" | "greeting" | null;
       heard: string;
       replies: string[];
       lowConfidence: boolean;
@@ -13,7 +15,7 @@ export type UtteranceResult =
       timings: { sttMs: number; repliesMs: number; totalMs: number };
       models: { stt: string; replies: string };
     }
-  | { status: "no_speech"; conversationId: string; timings: { sttMs: number; totalMs: number } };
+  | { status: "no_speech"; conversationId: string | null; timings: { sttMs: number; totalMs: number } };
 
 export type RepliesResult = {
   conversationId: string;
