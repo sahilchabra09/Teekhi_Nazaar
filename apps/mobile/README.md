@@ -1,5 +1,13 @@
 # IRIS Android robot app
 
+**0.6.4:** landscape uses a two-column welcome screen and a compact session header, keeping connection controls accessible and giving live video more height. Both columns scroll independently when needed for large text or small screens.
+
+**0.6.3:** the screen follows the phone's orientation automatically. Landscape places video and speech status side by side; rotation preserves the live session. Settings and sign-in remain scrollable. Robot driving calibration still requires the documented upright mount.
+
+**0.6.2:** recording is now automatic through Silero VAD. Start the session and speak; no record/send taps are needed. Short or mostly non-speech clips are rejected locally. See [speech workflow](../../docs/speech-workflow.md).
+
+**IRIS 0.6.1 speech update:** phone recording and the console's **Say something** now share the phone microphone and the authenticated Talk transcription/reply pipeline. Android recognition is optional. See the [current speech workflow and device checks](../../docs/speech-workflow.md).
+
 Native Kotlin / Jetpack Compose implementation of [mobile.md](../../docs/mobile.md), with the phone-side MQTT controller from [robot-operation.md](../../docs/robot-operation.md). Its mint, pine, teal, honey and sky palette, softly shaded cards and raised buttons match the main frontend's clay styling. The Android Studio project lives here.
 
 ## Build and install
@@ -30,7 +38,7 @@ The debug APK is signed automatically for local installation. Credentials, SDK p
 3. On the laptop, open `http://localhost:3001/` and **Continue with Google**. If the new role-onboarding screen appears, choose **Patient** to open the robot console; **Doctor** opens the care dashboard.
 4. On Android, tap **Continue with Google**, select the **same Google email**, and return to IRIS. Check that the displayed email matches the laptop account. No code-entry or laptop-linking step is needed. For Wi-Fi-only use, configure a phone-accessible HTTPS `BETTER_AUTH_URL` and register its exact `/api/auth/callback/google` URL in Google Cloud; see [Google setup](../../docs/google.md#android-google-sign-in).
 5. Tap **Start IRIS** and grant camera/microphone access. On the laptop, click **Connect phone** and allow camera access. Both sides use the real API on port 3000. The web console shows the phone camera; its **Your camera → phone** preview is displayed on the phone. Click **Enable audio** to hear received phone audio.
-6. In the console, select **Say something**, choose a phrase, and confirm **Speak it**. Verify the phone speaks and the console waits for matching `tts_status`. The integrated Talk API supports AI suggestions and laptop audio transcription when its provider keys are configured; Android STT supplies phone transcripts. The phone's separate WAV upload route `/api/utterance` still returns an explicit 501 until its STT bridge is connected.
+6. In the console, select **Say something**, choose a phrase, and confirm **Speak it**. Verify the phone speaks and the console waits for matching `tts_status`. The integrated Talk API supports AI suggestions and laptop audio transcription when its provider keys are configured; Android STT supplies phone transcripts. Phone WAV uploads and Android recognition now enter the same Talk reply pipeline; Say something records the connected phone, with laptop capture only when no phone is connected.
 
 The app stops and releases camera, microphone, sensors and robot control when its Activity pauses. Return and tap Start to resume. Hub reconnects while the app remains active; motor control always needs a new explicit Enable after faults/reconnects.
 
@@ -65,7 +73,7 @@ The default public broker matches the existing firmware's bench configuration. P
 ## Media behavior
 
 - 640×480 at 24 fps; phone is always the WebRTC offerer. The console sends `media_ready` after installing its signaling listeners; the phone creates a fresh peer for this request. Legacy `peer_status` startup is also supported. No STUN is needed on the shared LAN. Remote networks need a separately agreed ICE/TURN configuration.
-- Silero VAD processes 512-sample frames from WebRTC's audio callback, off the real-time audio thread. Audio is downmixed/downsampled to 16 kHz PCM. It keeps roughly 500 ms of preroll, starts after 256 ms of speech, ends after 704 ms of silence, rejects clips below 400 ms and caps clips at 15 seconds.
+- Silero VAD processes 512-sample frames from WebRTC's audio callback, off the real-time audio thread. Audio is downmixed/downsampled to 16 kHz PCM. It keeps roughly 500 ms of preroll, starts after 256 ms of speech, ends after 1.6 seconds of silence when requested by the console, rejects clips below 400 ms and caps clips at 15 seconds.
 - While no WebRTC call owns the mic (including JPEG mode), one `AudioRecord` supplies the same listener. It is stopped and released before a WebRTC peer starts. This allows listening before a laptop connects.
 - Incoming speech is queued and deduplicated by `speak_id`. TTS and optional `audio_url` playback both pause listening **before** playback/preparation, across the queue, and until 500 ms after the last item.
 - **JPEG fallback video** sends a throttled, rotated JPEG about every 150 ms, with backpressure. WebRTC failures select JPEG automatically; use **Retry WebRTC** to retry.

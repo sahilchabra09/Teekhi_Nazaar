@@ -1,14 +1,15 @@
 # Say something: listen, transcribe, suggest replies
 
+> **IRIS 0.6.1:** both phone capture and console Say something use the connected phone microphone and the same Talk pipeline. Laptop capture is the fallback when no phone is connected. See [current speech workflow](./speech-workflow.md); the older migration discussion below is historical.
+
 > **Update (AutoSage):** replies now come from **AutoSage fast-query on the patient's medical knowledge base**, and every conversation lives in **one AutoSage chat**. The OpenRouter reply models below are the **fallback**. The talk routes now take a `conversationId` and require the **patient** role. See [care.md](./care.md) §4–5 and §7 for the changed API.
 
 This is the IRIS version of gaze-connects' **Talk Live** feature (see [talk-live.md](./talk-live.md)).
 
 Someone near the robot speaks. IRIS records it, turns it into text, and an LLM suggests **three short replies**. The patient picks one with their eyes, confirms, and IRIS says it out loud. IRIS then listens for the answer, so the conversation keeps going.
 
-- **For now:** audio comes from the **laptop microphone**, chosen in the console. TTS plays on the laptop.
-- **Later:** the **robot phone** records and plays (§7).
-- **AI:** all calls go through the **Vercel AI SDK** to **OpenRouter**. AutoSage isn't used.
+- **Audio:** the connected phone records and plays; without a phone, the selected laptop microphone and browser TTS are used.
+- **AI:** shared OpenRouter transcription, then AutoSage replies with OpenRouter fallback.
 
 ---
 
@@ -38,7 +39,7 @@ sequenceDiagram
     UI->>UI: patient selects "Say something" (gaze dwell or click)
     UI->>UI: open chosen mic → record + voice-activity detection
     O->>UI: "Hey, do you need anything?"
-    UI->>UI: 1.2 s of silence → stop, trim, encode 16 kHz WAV
+    UI->>UI: 1.6 s of silence → stop, trim, encode 16 kHz WAV
     UI->>S: POST /api/talk/utterance (multipart: audio)
     S->>STT: transcribe() via AI SDK (custom OpenRouter transcription model)
     STT-->>S: text (+ language, confidence when available)
@@ -105,7 +106,7 @@ The **Say something** card now starts a conversation. The quick phrases moved to
 
 1. Learns the room's **noise floor** from the first ~200 ms, then keeps adjusting it slowly.
 2. A 20 ms frame counts as speech if its RMS > max(0.012, 3 × noise floor). **4 speech frames in a row** (80 ms) start an utterance.
-3. After speech starts, **1.2 s of silence** ends it. If nobody speaks within **8 s**, it stops with no upload, and the UI shows "Didn't catch that". It always stops at **20 s**.
+3. After speech starts, **1.6 s of silence** ends it. If nobody speaks within **8 s**, it stops with no upload, and the UI shows "Didn't catch that". It always stops at **20 s**.
 4. The clip is trimmed to *300 ms before speech starts* through *350 ms after it ends*, then encoded as 16-bit PCM WAV.
 5. "They're done" stops it immediately. Cancel throws the audio away.
 

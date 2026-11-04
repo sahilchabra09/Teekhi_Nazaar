@@ -72,7 +72,7 @@ Speech, suggestions, and media must not silently arm driving. The AI never publi
 
 ## Audio upload
 
-Proposed `POST /api/utterance` on the backend accepts one utterance as multipart form data: `audio` (WAV preferred), `utterance_id`, and `duration_ms`. Use HTTPS and application authentication. This endpoint handles media upload, not robot movement. A successful response is `202 {"ok":true}`; the backend sends transcript/suggestion events to the frontend over WebSocket asynchronously. Do not store clips or log their contents without consent.
+`POST /api/utterance` accepts authenticated multipart `audio` (WAV), `utterance_id`, and `duration_ms`, or Android fallback `text` and `confidence`. It delegates to the shared patient-authorized Talk routes and returns their JSON/status. The same-account console receives `talk_result` with `request_id` matching `utterance_id`, `ok`, `result`, and `ts`. Console `listen` commands (`action`: `start`, `stop`, `cancel`; `request_id`; optional `conversationId`; `ts`) control the phone capture. The phone reports `speech_state` (`processing`, `no_speech`, `failed`) with the same `request_id`. Use HTTPS and application authentication. Do not store clips or log their contents without consent.
 
 ## Browser module contracts
 

@@ -6,7 +6,7 @@ The authenticated console at `/` uses `useRobotConnection` and the shared `creat
 
 `NEXT_PUBLIC_SERVER_URL` points to the **same** Better Auth and media API (normally port 3000). The independent media URL override has been removed. On the phone, use that server's LAN IP or HTTPS hostname. See the [first-run instructions](../README.md#first-run).
 
-The backend authenticates both media roles and isolates rooms by the user ID obtained from Better Auth. The integrated `/api/talk/*` routes provide speech/replies with configured providers; the phone's separate `/api/utterance` bridge remains unconfigured. The server can authorize one owner for the paired robot console. Signing in does not grant motor control or doctor permissions. Role onboarding, care and Talk routes stay mounted beside the robot gateway. The unauthenticated development hub is only a test fixture.
+The backend authenticates both media roles and isolates rooms by the user ID obtained from Better Auth. The integrated `/api/talk/*` routes provide speech/replies with configured providers; the phone's `/api/utterance` bridge invokes those same routes using its verified, server-held Google session. The server can authorize one owner for the paired robot console. Signing in does not grant motor control or doctor permissions. Role onboarding, care and Talk routes stay mounted beside the robot gateway. The unauthenticated development hub is only a test fixture.
 
 ## Implemented account authorization
 
@@ -33,7 +33,7 @@ Current implementation and remaining service integration:
 | Route | Phone behavior | Backend behavior required |
 | --- | --- | --- |
 | `GET /ws?role=phone` | Authenticated `hello`; jittered 0.5–30 second reconnect for temporary failures | Implemented: authenticated upgrade, one peer per account/role, initial and updated `peer_status` |
-| `POST /api/utterance` | Authenticated multipart WAV in `audio`, ID in `utterance_id`, length in `duration_ms` | Currently **501**, explicitly unconfigured. When STT is connected, return **202 `{ "ok": true }`**, then emit real `transcript` and `suggestions` asynchronously to the same account's web peer. |
+| `POST /api/utterance` | Authenticated multipart WAV in `audio`, ID in `utterance_id`, length in `duration_ms` | Returns the shared Talk JSON/status and sends `talk_result` (`request_id`, `ok`, `result`, `ts`) to the same account's console. Android recognition sends multipart `text` and `confidence` through this route instead of WAV. |
 
 Kotlin sealed-message discriminator is exactly `type`; every modeled message includes epoch-millisecond `ts`. Unknown/malformed message types are ignored. Phone messages are implemented in `core/.../Protocol.kt`.
 
