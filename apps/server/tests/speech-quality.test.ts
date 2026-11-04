@@ -15,7 +15,7 @@ mock.module("../src/talk/ai", () => ({
   isLowConfidence:(value:number|null) => value !== null && value < .55,
 }));
 mock.module("../src/talk/conversations", () => ({
-  openConversation:async () => ({id:"conversation",shownReplies:[]}),
+  openConversation:async () => ({conversation:{id:"conversation",shownReplies:[]},reason:"continued"}),
   addTurn:async () => { turns++; }, addShownReplies:async () => {},
   endConversation:async () => {}, getConversation:async () => null, lastHeard:async () => null,
 }));
