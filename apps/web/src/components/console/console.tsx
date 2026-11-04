@@ -36,12 +36,14 @@ export default function Console({ userName }: { userName: string }) {
   const { view } = conversation;
   const [signingOut, setSigningOut] = useState(false);
 
-  // "Say something" (laptop mic → /api/talk → AutoSage, docs/talk.md + docs/care.md)
+  // Connected phone mic → shared Talk pipeline; selected laptop mic when no phone is connected.
   const [micId, setMicId] = useState("");
   const [micLevel, setMicLevel] = useState(0);
   const [micListVersion, setMicListVersion] = useState(0);
   const recorder = useRef<UtteranceRecorder | null>(null);
   const request = useRef<AbortController | null>(null);
+  const phoneCapture = useRef<{ id: string; hub: NonNullable<typeof connection.hub>; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const ignoredCaptures = useRef(new Set<string>());
   /** Current conversation (= one AutoSage chat). Cleared when the patient leaves conversation mode. */
   const conversationId = useRef<string | null>(null);
   /** After the phone confirms it spoke a talk reply, listen again for the answer. */
@@ -171,12 +173,56 @@ export default function Console({ userName }: { userName: string }) {
   // ───────────────────────────── Say something ─────────────────────────────
 
   const abortWork = useCallback(() => {
+    const capture = phoneCapture.current;
+    if (capture) {
+      phoneCapture.current = null; clearTimeout(capture.timer);
+      ignoredCaptures.current.add(capture.id);
+      if (ignoredCaptures.current.size > 100) ignoredCaptures.current.delete(ignoredCaptures.current.values().next().value!);
+      try { capture.hub.send({ type: "listen", action: "cancel", request_id: capture.id, ts: Date.now() }); } catch {}
+    }
     recorder.current?.cancel();
     recorder.current = null;
     request.current?.abort();
     request.current = null;
     setMicLevel(0);
   }, []);
+
+  useEffect(() => {
+    if (!connection.hub) return;
+    const finishCapture = () => {
+      if (phoneCapture.current) clearTimeout(phoneCapture.current.timer);
+      phoneCapture.current = null;
+    };
+    const offResult = connection.hub.on("talk_result", (message) => {
+      if (typeof message.request_id !== "string" || ignoredCaptures.current.has(message.request_id)) return;
+      if (phoneCapture.current && phoneCapture.current.id !== message.request_id) return;
+      finishCapture();
+      const result = message.result as import("@/lib/talk/api").UtteranceResult;
+      if (!message.ok || !result || typeof result.conversationId !== "string") {
+        const failure = message.result as { message?: string; error?: string };
+        toast.error(failure?.message ?? failure?.error ?? "Speech processing failed. Try again.");
+        setView({ name: "home" }); return;
+      }
+      conversationId.current = result.conversationId;
+      if (result.status === "no_speech") { setView({ name: "no-speech" }); return; }
+      dispatch({ type: "event", message: { type: "suggestions", utterance_id: result.conversationId,
+        heard: result.heard, suggestions: result.replies, low_confidence: result.lowConfidence,
+        requires_user_confirmation: true, ts: Date.now() } });
+    });
+    const offState = connection.hub.on("speech_state", (message) => {
+      if (typeof message.request_id !== "string" || ignoredCaptures.current.has(message.request_id)) return;
+      if (phoneCapture.current && phoneCapture.current.id !== message.request_id) return;
+      if (message.state === "processing") setView({ name: "thinking" });
+      else if (message.state === "no_speech" || message.state === "failed") {
+        finishCapture(); setView({ name: "no-speech" });
+        if (message.state === "failed") toast.error("Phone speech processing failed. Check the phone and server.");
+      }
+    });
+    return () => { offResult(); offState(); };
+  }, [connection.hub, setView]);
+  useEffect(() => {
+    if (!connection.phone && phoneCapture.current) { abortWork(); setView({ name: "no-speech" }); }
+  }, [connection.phone, abortWork, setView]);
 
   /** Leaving conversation mode ends the conversation; the next "Say something" opens a new chat. */
   const endConversation = useCallback(() => {
@@ -209,6 +255,17 @@ export default function Console({ userName }: { userName: string }) {
     abortWork();
     stopSpeaking();
     setView({ name: "listening", speaking: false });
+
+    if (connection.phone && connection.hub && connection.status === "connected") {
+      const id = `u_${crypto.randomUUID()}`;
+      const timer = setTimeout(() => {
+        abortWork(); toast.error("The phone did not finish processing speech. Try again."); setView({ name: "no-speech" });
+      }, 100_000);
+      phoneCapture.current = { id, hub: connection.hub, timer };
+      try { connection.hub.send({ type: "listen", action: "start", request_id: id, conversationId: conversationId.current, ts: Date.now() }); }
+      catch (error) { abortWork(); showError(error); }
+      return;
+    }
 
     let rec: UtteranceRecorder;
     try {
@@ -248,7 +305,7 @@ export default function Console({ userName }: { userName: string }) {
     } catch (error) {
       showError(error);
     }
-  }, [abortWork, micId, setView, showError]);
+  }, [abortWork, micId, setView, showError, connection.phone, connection.hub, connection.status]);
 
   const moreReplies = useCallback(
     async (heard: string) => {
@@ -388,7 +445,11 @@ export default function Console({ userName }: { userName: string }) {
           hint: "Stops on its own when they finish",
           level: micLevel,
         },
-        { kind: "action", key: "done", title: "They’re done", icon: Square, tone: "honey", onSelect: () => recorder.current?.stop() },
+        { kind: "action", key: "done", title: "They’re done", icon: Square, tone: "honey", onSelect: () => {
+          const capture = phoneCapture.current;
+          if (capture) capture.hub.send({ type: "listen", action: "stop", request_id: capture.id, ts: Date.now() });
+          else recorder.current?.stop();
+        } },
         { kind: "action", key: "cancel", title: "Cancel", icon: X, tone: "plain", onSelect: goHome },
       ];
       break;
@@ -454,7 +515,7 @@ export default function Console({ userName }: { userName: string }) {
 
     case "suggestions": {
       const fromTalk = conversationId.current !== null && view.utteranceId === conversationId.current;
-      if (view.lowConfidence && !fromTalk) {
+      if (view.lowConfidence) {
         heading = "Could you repeat that?";
         cards = [
           { kind: "action", key: "repeat", title: "Ask them to repeat", tone: "honey", onSelect: () => confirm("Sorry, could you repeat that?", view, "system") },
@@ -463,7 +524,6 @@ export default function Console({ userName }: { userName: string }) {
         ];
         break;
       }
-      // Talk replies are always usable: when unsure, AutoSage already phrases them as "could you repeat that?".
       heading = view.lowConfidence ? "Not sure I heard right" : "Pick a reply";
       back = { label: "Ignore", onSelect: goHome };
       if (fromTalk) extra = { label: "New replies", onSelect: () => void moreReplies(view.heard) };
@@ -530,9 +590,10 @@ export default function Console({ userName }: { userName: string }) {
           footer={
             <div className="flex flex-col gap-1 px-1 pt-1">
               <ScreenGazeControls />
-              {/* which mic "Say something" listens with (the robot phone's mic once its STT is wired) */}
+              {/* Show the actual capture source; never silently switch a connected phone to laptop audio. */}
               <div className="flex min-w-0 items-center justify-between gap-1">
-                <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />
+                {connection.phone ? <span className="text-xs text-pine-soft">Listening source: phone microphone</span>
+                  : <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />}
                 <ControlsChip onOpen={() => openSettings()} />
               </div>
               <div className="flex items-center gap-2">

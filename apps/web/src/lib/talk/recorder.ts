@@ -29,15 +29,9 @@ export type RecorderOptions = {
 
 const WORKLET_SOURCE = `
 class IrisTap extends AudioWorkletProcessor {
-  constructor() { super(); this.buf = new Float32Array(2048); this.n = 0; }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
-    if (ch) {
-      for (let i = 0; i < ch.length; i++) {
-        this.buf[this.n++] = ch[i];
-        if (this.n === this.buf.length) { this.port.postMessage(this.buf); this.buf = new Float32Array(2048); this.n = 0; }
-      }
-    }
+    if (ch) this.port.postMessage(ch.slice());
     return true;
   }
 }
@@ -65,7 +59,8 @@ export class UtteranceRecorder {
 
   static async start(opts: RecorderOptions = {}) {
     const rec = new UtteranceRecorder();
-    await rec.begin(opts);
+    try { await rec.begin(opts); }
+    catch (error) { rec.teardown(); throw error; }
     return rec;
   }
 
@@ -88,7 +83,7 @@ export class UtteranceRecorder {
   private lastSpeech = -1; // sample index of the last speech frame
 
   private async begin(opts: RecorderOptions) {
-    const silenceMs = opts.silenceMs ?? 1200;
+    const silenceMs = opts.silenceMs ?? 1600;
     const noSpeechTimeoutMs = opts.noSpeechTimeoutMs ?? 8000;
     const maxMs = opts.maxMs ?? 20_000;
 
@@ -105,6 +100,7 @@ export class UtteranceRecorder {
 
     const ctx = new AudioContext();
     this.cleanupFns.push(() => void ctx.close());
+    await ctx.resume();
     const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
     try {
       await ctx.audioWorklet.addModule(url);
@@ -115,10 +111,14 @@ export class UtteranceRecorder {
     const source = ctx.createMediaStreamSource(stream);
     const tap = new AudioWorkletNode(ctx, "iris-tap");
     source.connect(tap);
+    const silent = ctx.createGain();
+    silent.gain.value = 0;
+    tap.connect(silent); silent.connect(ctx.destination);
     this.cleanupFns.push(() => {
       tap.port.onmessage = null;
       source.disconnect();
       tap.disconnect();
+      silent.disconnect();
     });
 
     const downsample = makeDownsampler(ctx.sampleRate);
@@ -126,7 +126,7 @@ export class UtteranceRecorder {
 
     // VAD state
     let frame: number[] = [];
-    let noiseFloor = 0;
+    let noiseFloor = 0.001;
     let calibrationFrames = 0;
     let speechRun = 0;
     let silenceRun = 0;
@@ -148,12 +148,12 @@ export class UtteranceRecorder {
 
         // Learn the room's noise floor from the first ~200 ms, then track it slowly.
         if (calibrationFrames < 10) {
-          noiseFloor = (noiseFloor * calibrationFrames + rms) / (calibrationFrames + 1);
+          // Never teach the detector that immediately spoken words are room noise.
+          noiseFloor = Math.min(0.002, (noiseFloor * calibrationFrames + rms) / (calibrationFrames + 1));
           calibrationFrames++;
-          continue;
         }
 
-        const threshold = Math.max(0.012, noiseFloor * 3);
+        const threshold = Math.max(0.006, noiseFloor * 3);
         const isSpeech = rms > threshold;
 
         if (isSpeech) {
@@ -179,6 +179,9 @@ export class UtteranceRecorder {
         if (elapsed >= maxMs) return this.finish(false);
       }
     };
+    const deadline = setTimeout(() => this.finish(false), maxMs);
+    const noSpeechDeadline = setTimeout(() => { if (this.speechStart < 0) this.finish(false); }, noSpeechTimeoutMs);
+    this.cleanupFns.push(() => { clearTimeout(deadline); clearTimeout(noSpeechDeadline); });
   }
 
   private finish(_cancelled: boolean) {
