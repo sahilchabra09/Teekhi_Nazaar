@@ -23,6 +23,7 @@ import { ConnectionBar } from "./connection-bar";
 import { ControlSettingsDialog, ControlsChip } from "./control-settings";
 import { MicPicker, readSavedMic } from "./mic-picker";
 import { RobotFeed } from "./robot-feed";
+import { ScreenGazeControls } from "./screen-gaze-controls";
 import { type PanelCard, SidePanel } from "./side-panel";
 
 const QUICK_PHRASES = ["Please come here.", "I need some help.", "Could you repeat that?"];
@@ -532,6 +533,7 @@ export default function Console({ userName }: { userName: string }) {
           cards={cards}
           footer={
             <div className="flex flex-col gap-1 px-1 pt-1">
+              <ScreenGazeControls />
               {/* which mic "Say something" listens with (the robot phone's mic once its STT is wired) */}
               <div className="flex min-w-0 items-center justify-between gap-1">
                 <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />
