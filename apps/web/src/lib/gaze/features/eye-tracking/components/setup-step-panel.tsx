@@ -5,7 +5,6 @@ import {
   EyeControlsStyles,
 } from "../../tracking-ui/layout-styles"
 import { EyeMessageStyles } from "../../tracking-ui/control-styles"
-import { HelpTip } from "./help-tip"
 import type { SetupStepPanelProps } from "./setup-step-panel.types"
 export function SetupStepPanel({
   stepName,
@@ -28,7 +27,7 @@ export function SetupStepPanel({
     >
       <div className={`eye-controls-heading ${EyeControlsHeadingStyles}`}>
         <h2 id={headingId}>{stepName}</h2>
-        <HelpTip text={description} label={`${stepName} help`} />
+        <p className="mt-2 text-base leading-relaxed text-pine-soft">{description}</p>
       </div>
       {stage}
       <div className={`eye-controls-body ${EyeControlsBodyStyles}`}>

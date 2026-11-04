@@ -12,10 +12,7 @@ export const EyeHelpTipStyles = `
 `
 
 export const EyeFloatingTooltipStyles = `
-  fixed [z-index:1000] [width:max-content] [max-width:min(280px,_calc(100vw_-_16px))]
-  [padding:7px_10px] [border:1px_solid_#303330] [border-radius:5px] [background:#171817]
-  [color:#f4f4f2] [font-family:"Geist_Variable",_sans-serif] [font-size:11px] [font-weight:400]
-  [line-height:1.5] pointer-events-none [box-shadow:0_5px_16px_#0005]
+  fixed z-[1000] w-max max-w-[min(18rem,90vw)] rounded-xl bg-pine px-3 py-2 font-sans text-xs leading-relaxed text-white shadow-lg pointer-events-none
 `
 
 export const EyeGuidanceRowStyles = `
@@ -42,36 +39,23 @@ export const EyeStatusIndicatorStyles = `
 `
 
 export const EyeMutedStyles = `
-  [font-size:11px] [line-height:1.6] [color:var(--dim)] [margin:0_0_14px]
+  text-sm font-normal leading-relaxed text-pine-soft
 `
 
 export const EyeFieldStyles = `
-  flex flex-col [gap:7px] [color:var(--foreground)]
-  [font-size:10px] [margin:12px_0] [&_input:not([type="range"])]:[height:39px] [&_input:not([type="range"])]:w-full
-  [&_input:not([type="range"])]:[border:1px_solid_var(--border)] [&_input:not([type="range"])]:[border-radius:6px] [&_input:not([type="range"])]:[background:var(--card)] [&_input:not([type="range"])]:[color:var(--foreground)]
-  [&_input:not([type="range"])]:[padding:8px_10px] [&_input:not([type="range"])]:[font-size:11px] [&_select]:[height:39px] [&_select]:w-full
-  [&_select]:[border:1px_solid_var(--border)] [&_select]:[border-radius:6px] [&_select]:[background:var(--card)] [&_select]:[color:var(--foreground)]
-  [&_select]:[padding:8px_10px] [&_select]:[font-size:11px]
+  my-4 flex flex-col gap-2 text-sm font-semibold text-pine [&_input:not([type=range])]:min-h-11 [&_select]:min-h-11 [&_input:not([type=range])]:w-full [&_select]:w-full [&_input]:rounded-xl [&_select]:rounded-xl [&_input]:border [&_select]:border [&_input]:border-pine/15 [&_select]:border-pine/15 [&_input]:bg-white [&_select]:bg-white [&_input]:px-3 [&_select]:px-3
 `
 
 export const EyeButtonStyles = `
-  flex items-center justify-center [gap:9px]
-  [font-size:11px] [font-weight:550] [min-height:39px] [padding:10px_15px]
-  [border-radius:6px] [line-height:1.3] [text-decoration:none] [transition:background_0.15s]
-  [white-space:normal] [&.primary]:[background:var(--primary)] [&.primary]:[color:var(--primary-foreground)] [&.primary]:[border:1px_solid_var(--primary)]
-  [&.primary:hover]:[background:color-mix(in_srgb,_var(--primary)_85%,_var(--background))] [&.secondary]:[background:var(--card)] [&.secondary]:[color:var(--foreground)] [&.secondary]:[border:1px_solid_var(--border)]
-  [&.secondary:hover]:[background:var(--muted)]
+  clay-press inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-pine/15 bg-white px-4 py-2.5 text-sm font-bold text-pine [&.primary]:bg-pine [&.primary]:text-white [&.secondary]:bg-surface
 `
 
 export const EyeSourceTypeStyles = `
-  grid [grid-template-columns:repeat(2,_minmax(0,_1fr))] [gap:8px] [margin:10px_0_4px]
-  [&_button]:min-w-0 [&_button]:[padding-inline:8px] [&_button[aria-pressed="true"]]:[background:var(--muted)] [&_button[aria-pressed="true"]]:[border-color:var(--primary)]
+  my-3 grid grid-cols-2 gap-2 [&_button[aria-pressed=true]]:bg-teal [&_button[aria-pressed=true]]:text-white
 `
 
 export const EyeMessageStyles = `
-  [font-size:12px] [color:var(--foreground)] [background:var(--muted)] [border:1px_solid_var(--border)]
-  [padding:12px] [border-radius:6px] [margin-top:15px] [&.error]:[color:var(--foreground)]
-  [&.error]:[background:color-mix(in_srgb,_#f5c4c8_12%,_var(--card))] [&.error]:[border-color:color-mix(in_srgb,_#f5c4c8_45%,_var(--border))]
+  my-3 rounded-xl bg-mist px-4 py-3 text-sm text-pine [&.error]:bg-tomato/10 [&.error]:text-red-900
 `
 
 export const EyeDetailsStyles = `
@@ -86,7 +70,7 @@ export const EyeNumberGridStyles = `
 `
 
 export const EyeSmallStyles = `
-  [font-size:10px] [color:var(--muted-foreground)] [line-height:1.7] [margin:14px_0]
+  my-3 text-sm leading-relaxed text-pine-soft
 `
 
 export const EyeProgressTrackStyles = `
@@ -137,27 +121,27 @@ export const EyeStatusDotStyles = `
 
 export const GazeOffsetControlsStyles = `
   grid [gap:8px] min-w-0 [padding-block:12px]
-  [border-block:1px_solid_#303431] [color:#c5cbc8] [font-size:12px] [&_:disabled]:[opacity:0.4]
-  [&_:disabled]:[cursor:default] [&_:focus-visible]:[outline:2px_solid_#a8d8c6] [&_:focus-visible]:[outline-offset:2px]
+  [border-block:1px_solid_var(--border)] [color:var(--pine)] [font-size:12px] [&_:disabled]:[opacity:0.4]
+  [&_:disabled]:[cursor:default] [&_:focus-visible]:[outline:2px_solid_var(--teal)] [&_:focus-visible]:[outline-offset:2px]
 `
 
 export const GazeOffsetHeadingStyles = `
   flex items-center justify-between [min-height:28px]
-  [&_small]:[color:#969e99] [&_small]:[font-size:11px]
+  [&_small]:[color:var(--pine-soft)] [&_small]:[font-size:11px]
 `
 
 export const GazeOffsetResetStyles = `
   grid place-items-center [width:30px] [height:28px]
-  [padding:0] [border:1px_solid_#343a36] [border-radius:5px] [background:transparent]
-  [color:inherit] cursor-pointer [&:hover:not(:disabled)]:[background:#252d28] [&:hover:not(:disabled)]:[color:#fff]
+  [padding:0] [border:1px_solid_var(--border)] [border-radius:5px] [background:transparent]
+  [color:inherit] cursor-pointer [&:hover:not(:disabled)]:[background:var(--teal)] [&:hover:not(:disabled)]:[color:#fff]
 `
 
 export const GazeOffsetAxisStyles = `
   grid [grid-template-columns:34px_minmax(48px,_1fr)_76px] [gap:10px] items-center
   [&_input[type="range"]]:w-full [&_input[type="range"]]:min-w-0 [&_input[type="range"]]:[height:28px] [&_input[type="range"]]:[margin:0]
-  [&_input[type="range"]]:[accent-color:#a8d8c6] [&_input[type="range"]]:[cursor:ew-resize] [&_.gaze-offset-number]:w-full [&_.gaze-offset-number]:min-w-0
-  [&_.gaze-offset-number]:[height:32px] [&_.gaze-offset-number]:[padding:4px_6px] [&_.gaze-offset-number]:[border:1px_solid_#343a36] [&_.gaze-offset-number]:[border-radius:5px]
-  [&_.gaze-offset-number]:[background:#0d100e] [&_.gaze-offset-number]:[color:#f0f3f1] [&_.gaze-offset-number]:[font:inherit] [&_.gaze-offset-number]:tabular-nums
+  [&_input[type="range"]]:[accent-color:var(--teal)] [&_input[type="range"]]:[cursor:ew-resize] [&_.gaze-offset-number]:w-full [&_.gaze-offset-number]:min-w-0
+  [&_.gaze-offset-number]:[height:32px] [&_.gaze-offset-number]:[padding:4px_6px] [&_.gaze-offset-number]:[border:1px_solid_var(--border)] [&_.gaze-offset-number]:[border-radius:5px]
+  [&_.gaze-offset-number]:[background:var(--surface)] [&_.gaze-offset-number]:[color:var(--pine)] [&_.gaze-offset-number]:[font:inherit] [&_.gaze-offset-number]:tabular-nums
   [&_.gaze-offset-number]:text-right
 `
 

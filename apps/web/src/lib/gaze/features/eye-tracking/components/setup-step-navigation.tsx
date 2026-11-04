@@ -1,7 +1,6 @@
-import { Check, ChevronRight } from "lucide-react"
+import { Check } from "lucide-react"
 import {
   EyeBreadcrumbsStyles,
-  EyeStepChevronStyles,
   EyeStepNavStyles,
   EyeStepNumberStyles,
   EyeStepStyles,
@@ -50,13 +49,6 @@ export function SetupStepNavigation({
                   {name}
                 </span>
               </button>
-              {index < steps.length - 1 && (
-                <ChevronRight
-                  className={`eye-step-chevron ${EyeStepChevronStyles}`}
-                  size={14}
-                  aria-hidden="true"
-                />
-              )}
             </li>
           )
         })}

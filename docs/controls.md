@@ -1,16 +1,16 @@
 # Patient console controls
 
-The console uses the robot phone for driving and a separate ESP8266 for the three appliance outputs. Both use the browser's shared MQTT WebSocket connection. Set `NEXT_PUBLIC_MQTT_BROKER_URL` **before building the web app** to the WebSocket listener for your broker. The default demo endpoint is `wss://broker.emqx.io:8084/mqtt`. Configure the phone and appliance board to use the corresponding broker. The footer's **Controls** chip shows connection status and offers **Reconnect**.
+The console uses the robot phone for driving and a separate ESP8266 for the three appliance outputs. Both use the browser's shared MQTT WebSocket connection. Set `NEXT_PUBLIC_MQTT_BROKER_URL` **before building the web app** to the WebSocket listener for your broker. The default demo endpoint is `wss://broker.emqx.io:8084/mqtt`. Configure the phone and appliance board to use the corresponding broker. **Settings** in the patient bar contains microphone and laptop camera selection, the appliance password and MQTT connection status.
 
 ## Drive from the phone camera
 
-1. Open the console on HTTPS or localhost for camera access and Web Crypto. On the mounted phone, enable the robot controller and configure its MQTT settings and ESP password. Start IRIS. Sign in to the laptop console with the same authorized account and choose **Connect phone**. Wait for a live camera picture.
+1. Open the console on HTTPS or localhost for camera access and Web Crypto. On the mounted phone, enable the robot controller and configure its MQTT settings and ESP password. Start IRIS. Sign in to the laptop console with the same authorized account and choose **Connect phone** inside the robot video. Wait for a live camera picture.
 2. On the phone, open **Session settings**, tap **Calibrate**, **Authorize**, then **Enable driving** once the robot is online.
-3. In the console, choose **Set up eye tracking**. Complete Screen 1 calibration and validation and choose **Use gaze in console**.
+3. In the patient dashboard choose **Setup**. After Screen 1 calibration and the accuracy check, look at or click **Continue to dashboard** to use **Drive**, **Communicate**, and **Appliances** with gaze. If the accuracy check has not passed, the same button opens the dashboard with gaze off. Choose **Drive** to show the directional regions.
 4. Fixate on a labelled region of the phone video for 900 ms. Keep looking there to continue. The outer columns turn left and right. The middle column drives forward at the top, stops in the centre and reverses at the bottom. You can also press and hold a region with a pointer or focus it and hold Space or Enter.
 5. Look away, release the control, or select **Stop** to end the movement. If the console asks you to press Stop again, select the red **Stop** button to send a fresh signed stop. A stop disarms the phone. Tap **Enable driving** on the phone and make a new selection before the next movement.
 
-The waiting screen and the laptop-camera preview have no drive regions. Controls require recent robot frames, a connected phone and broker, a current grant, and a fresh `ready` status from the calibrated phone with its ESP online. During a hold the phone may report `driving`. The console stops renewing if gaze or feed is lost, the tab loses focus or is hidden, a modal opens, or the grant, connection or mobile status becomes unusable. It attempts a signed stop for an active hold. The phone's intention timeout also disarms it if updates stop arriving.
+To send a local camera view back to the phone, pick **Shared camera** in **Settings**, then choose **Share camera** in the video panel. The waiting screen and the laptop-camera preview have no drive regions. Controls require recent robot frames, a connected phone and broker, a current grant, and a fresh `ready` status from the calibrated phone with its ESP online. During a hold the phone may report `driving`. The console stops renewing if gaze or feed is lost, the tab loses focus or is hidden, a modal opens, or the grant, connection or mobile status becomes unusable. It attempts a signed stop for an active hold. The phone's intention timeout also disarms it if updates stop arriving.
 
 ### Drive protocol
 
@@ -40,7 +40,7 @@ The phone enforces authorization and drive readiness locally. A broker PUBACK re
 
 ## Switch appliances
 
-Choose **Appliances** and enter the dedicated appliance password via **Password** or the footer's **Controls** chip. This password is stored in this browser. The robot's motor password belongs on the mounted phone. Opening an existing console removes the old browser-stored robot password when storage is writable.
+Choose **Appliances** and enter the dedicated appliance password via **Password** or **Settings** in the patient bar. This password is stored in this browser. The robot's motor password belongs on the mounted phone. Opening an existing console removes the old browser-stored robot password when storage is writable.
 
 | Card | MQTT key | NodeMCU pin | GPIO |
 | --- | --- | --- | --- |

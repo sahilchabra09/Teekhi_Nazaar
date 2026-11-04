@@ -36,13 +36,13 @@ export const EyePreviewEmptyStyles = `
   [flex:0_0_auto] [width:min(100%,_420px)] [aspect-ratio:1] min-h-0
   flex flex-col items-center justify-center
   [align-self:center] [margin-block:auto] relative [background:var(--eye-preview)]
-  [&_h2]:[font-size:17px] [&_h2]:[font-weight:450] [&_h2]:[letter-spacing:-0.4px] [&_h2]:[color:var(--eye-preview-text)]
-  [&_p]:[color:var(--eye-preview-muted)] [&_p]:[font-size:11px] [&_p]:[margin-top:7px]
+  [&_h2]:font-display [&_h2]:text-xl [&_h2]:font-bold [&_h2]:[letter-spacing:-0.4px] [&_h2]:[color:var(--eye-preview-text)]
+  [&_p]:text-center [&_p]:[color:var(--eye-preview-muted)] [&_p]:text-sm [&_p]:[margin-top:7px]
 `
 
 export const EyeCameraOutlineStyles = `
   [width:65px] [height:65px] [border:1px_solid_var(--eye-preview-line)] [border-radius:18px]
-  grid place-items-center [color:var(--eye-preview-muted)] [margin:0_0_18px]
+  grid place-items-center bg-mist text-teal [margin:0_0_12px]
 `
 
 export const EyeThumbnailsStyles = `

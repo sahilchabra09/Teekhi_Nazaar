@@ -23,7 +23,7 @@ export function CameraSourceType({
         aria-pressed={value === "usb"}
         onClick={() => onChange("usb")}
       >
-        <Usb size={19} aria-hidden="true" />
+        <Usb size={18} aria-hidden="true" /> USB camera
       </button>
       <button
         className={`eye-button ${EyeButtonStyles} secondary`}
@@ -33,7 +33,7 @@ export function CameraSourceType({
         aria-pressed={value === "network"}
         onClick={() => onChange("network")}
       >
-        <Wifi size={19} aria-hidden="true" />
+        <Wifi size={18} aria-hidden="true" /> Network camera
       </button>
     </div>
   )

@@ -2,7 +2,7 @@ import type { HubMessage } from "../rtc/robot-stream";
 
 export type ReplySource = "suggestion" | "phrase" | "system";
 export type ConsoleView =
-  | { name: "home" | "phrases" | "appliances" }
+  | { name: "home" | "drive" | "communicate" | "phrases" | "appliances" }
   // "Say something" with the laptop mic (docs/talk.md): listening → thinking → suggestions / no-speech
   | { name: "listening"; speaking: boolean }
   | { name: "thinking"; heard?: string }

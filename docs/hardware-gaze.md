@@ -31,10 +31,10 @@ Use a simulated MQTT receiver for frontend/backend work when hardware is unavail
 
 ## Screen 1 in the patient console
 
-Open **Set up eye tracking** in the patient console on localhost or HTTPS. Select the head-mounted eye camera or its network video stream. The camera on the robot phone supplies the driving view. Frame the eye, build and lock the eye model, and optionally add a separate front camera for head compensation. Follow the nine screen calibration points and the accuracy check. **Use gaze in console** becomes available after a live camera calibration passes validation.
+Open **Setup** beside the patient’s name on localhost or HTTPS. Select the head-mounted eye camera or its network video stream. The camera on the robot phone supplies the driving view. Frame the eye, build and lock the eye model, and optionally add a separate front camera for head compensation. Follow the nine screen calibration points and the accuracy check. Once the accuracy check passes, the gaze pointer activates over the video and cards. Hold your gaze on **Drive**, **Communicate**, or **Appliances** to enter that activity.
 
 Hold your gaze on a card or video region until its dwell completes. Appliance cards send one on/off request per fixation. Look away and back to switch it again. The label follows the appliance board’s state report. Enter the appliance control password in the console settings. See the [appliance board setup](../iot/README.md) for the three output channels.
 
-The tracker maps camera measurements into normalized viewport coordinates and hit-tests visible console targets. Moving off a target, losing valid tracking, opening settings or hiding the page ends a hold. A screen resize requires calibration again. Choose **Gaze active · adjust** to return to the tracker, or **Close tracker** to release its cameras.
+The tracker maps camera measurements into normalized viewport coordinates and hit-tests visible console targets. Moving off a target, losing valid tracking, opening settings or hiding the page ends a hold. A screen resize requires calibration again. Choose **Setup** to review the eye camera and calibration. The separate **Settings** panel configures the conversation microphone, the laptop camera to share with the phone, and the appliance connection.
 
 Run `bun install` from the repository root before starting the website. The web dev and build commands prepare the local vision runtime. Eye detection and calibration run in browser workers. The [control guide](controls.md) covers robot and appliance settings.

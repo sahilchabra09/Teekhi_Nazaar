@@ -1,11 +1,7 @@
 /** Static Tailwind primitives for threshold presentation. */
 
 export const EyeThresholdControlsStyles = `
-  [grid-column:1] [grid-row:1] min-w-0 min-h-0
-  w-full h-full [align-self:stretch] grid
-  [grid-template-rows:auto_minmax(0,_1fr)] [padding:0] [align-content:start] [row-gap:0]
-  [margin:0] [border:1px_solid_var(--line)] [border-radius:10px] [background:var(--card)]
-  [@container(max-width:_900px)]:[grid-column:1] [@container(max-width:_900px)]:[grid-row:1] [@container(max-width:_900px)]:[grid-template-rows:auto_auto]
+  min-w-0 space-y-3 rounded-2xl bg-mist p-4 text-pine [container-type:inline-size]
 `
 
 export const EyeThresholdHeadingStyles = `
@@ -24,12 +20,7 @@ export const EyeThresholdTitleStyles = `
 `
 
 export const EyeThresholdModesStyles = `
-  flex [gap:3px] [padding:3px] [border:1px_solid_var(--line)]
-  [background:#1c1e1d] [border-radius:7px] [margin:0] [justify-self:start]
-  [&_button]:grid [&_button]:place-items-center [&_button]:[width:34px] [&_button]:[height:28px]
-  [&_button]:[padding:0] [&_button]:[border-radius:4px] [&_button]:[color:var(--dim)] [&_button]:[font-size:10px]
-  [&_button]:[font-weight:550] [&_button]:[min-height:32px] [&_button[aria-pressed="true"]]:[color:var(--ink)] [&_button[aria-pressed="true"]]:[background:#303633]
-  [&_button[aria-pressed="true"]]:[box-shadow:inset_0_0_0_1px_#414844]
+  flex rounded-xl bg-surface p-1 [&_button]:min-h-9 [&_button]:flex-1 [&_button]:rounded-lg [&_button]:px-2 [&_button]:text-sm [&_button[aria-pressed=true]]:bg-teal [&_button[aria-pressed=true]]:text-white
 `
 
 export const EyeThresholdControlRowStyles = `
@@ -56,8 +47,5 @@ export const EyeThresholdSliderStyles = `
 `
 
 export const EyeThresholdValueStyles = `
-  [grid-area:value] [width:64px] [height:32px] [padding:5px_7px]
-  [border:1px_solid_var(--line)] [border-radius:6px] [color:var(--ink)] [background:#0d0e0d]
-  [font-size:11px] tabular-nums text-center [&::-webkit-inner-spin-button]:[opacity:0.55]
-  [&::-webkit-outer-spin-button]:[opacity:0.55] max-[480px]:[width:58px] [@container(max-width:_900px)]:[width:58px]
+  [grid-area:value] h-9 w-full rounded-lg border border-pine/15 bg-white px-1 text-center text-sm tabular-nums text-pine
 `

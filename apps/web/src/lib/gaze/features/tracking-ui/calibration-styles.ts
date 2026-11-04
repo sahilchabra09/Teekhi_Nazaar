@@ -32,13 +32,8 @@ export function calibrationCancelTop(target: Point): string {
 }
 
 export const EyeCalibrationWelcomeStyles = `
-  absolute [inset:80px_24px_36px] flex flex-col
-  justify-center items-center [gap:16px] [padding-bottom:100px]
-  text-center [&_h2]:[max-width:780px] [&_h2]:[font-size:clamp(26px,_3.8vw,_48px)] [&_h2]:[font-weight:600]
-  [&_h2]:[letter-spacing:-1.3px] [&_h2]:[line-height:1.15] [&_p]:[max-width:660px] [&_p]:[font-size:15px]
-  [&_p]:[line-height:1.5] [&_p]:[color:var(--muted-foreground)] [&_.eye-calibration-start]:absolute [&_.eye-calibration-start]:[bottom:20px]
-  [&_.eye-calibration-start]:[min-width:240px] [&_.eye-calibration-start]:[min-height:52px] [&_.eye-calibration-start]:[color:white] [&_.eye-calibration-start]:[background:color-mix(in_srgb,_var(--primary)_40%,_#09241b)]
-  [&_.eye-calibration-error]:[color:#edb2a8]
+  absolute inset-0 m-auto flex h-fit max-h-[calc(100dvh-7rem)] w-[min(38rem,calc(100%-2rem))] flex-col items-center gap-4 overflow-auto rounded-[2rem] bg-surface px-6 py-8 text-center shadow-[var(--clay-drop-sm)] sm:p-10
+  [&_h2]:font-display [&_h2]:text-3xl [&_h2]:font-bold [&_p]:text-base [&_p]:leading-relaxed [&_p]:text-pine-soft [&_.eye-calibration-error]:text-red-900
 `
 
 export const EyeCalibrationTargetStyles = `
@@ -52,12 +47,12 @@ export const EyeCalibrationStimulusStyles = `
 `
 
 export const EyeCalibrationPillStyles = `
-  absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 [height:62.5%] w-full [border-radius:999px]
+  absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 [height:62.5%] w-full ring-1 ring-pine [border-radius:999px]
   [transition:background-color_80ms_linear]
 `
 
 export const EyeCalibrationFocalPointStyles = `
-  absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 [width:3px] [height:3px] [background:#090909]
+  absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 [width:3px] [height:3px] [background:white] [box-shadow:0_0_0_1px_var(--pine)]
   [border-radius:50%]
 `
 

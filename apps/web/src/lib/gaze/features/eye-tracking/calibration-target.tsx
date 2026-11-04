@@ -58,11 +58,7 @@ export function CalibrationTarget({
     void animation.finished.catch(() => undefined)
     return () => animation.cancel()
   }, [bursting])
-  const hue = 55 - progress * 50
-  let color = "#ccd2ce"
-  if (progress > 0) {
-    color = `hsl(${hue} ${35 + progress * 65}% ${70 - progress * 20}%)`
-  }
+  const color = `color-mix(in srgb, var(--teal), var(--honey) ${fraction * 100}%)`
   return (
     <span
       ref={stimulus}

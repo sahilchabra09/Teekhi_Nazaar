@@ -1,9 +1,10 @@
 "use client";
 
-import { Octagon, Video } from "lucide-react";
+import { Octagon, VideoOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { IrisMark } from "@/components/iris/logo";
+import type { ReactNode } from "react";
+import { VideoTool } from "./connection-bar";
 import type { DriveAction, Direction, DriveSource } from "@/lib/mqtt/robot";
 import type { RobotStream } from "@/lib/rtc";
 
@@ -31,7 +32,7 @@ type Props = {
   heardLabel?: string;
   /** Small status pill at the top of the feed, e.g. "Listening…". */
   status?: string | null;
-  onPreviewWebcam: () => void;
+  menu?: ReactNode;
 };
 
 export function RobotFeed({
@@ -45,7 +46,7 @@ export function RobotFeed({
   heard,
   heardLabel = "Someone nearby said",
   status,
-  onPreviewWebcam,
+  menu,
 }: Props) {
   // Regions only exist while the robot's camera (stream or JPEG fallback) is on screen;
   // the green waiting screen is never clickable.
@@ -91,7 +92,14 @@ export function RobotFeed({
   }, [stream, mediaState, frame]);
 
   return (
-    <div className="relative h-full overflow-hidden rounded-[1.5rem] bg-pine shadow-[0_10px_30px_-12px_rgb(18_56_50/0.45)]">
+    <section aria-label="Robot video" className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.75rem] bg-pine text-white">
+      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2.5 md:px-5">
+        <h2 className="mr-auto flex items-center gap-2 font-display text-lg font-bold">
+          <span aria-hidden className={`size-2 rounded-full ${hasFeed ? "bg-teal-light" : "bg-sky"}`} />Robot video
+        </h2>
+        {menu}
+      </header>
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         <video
           ref={videoRef}
           autoPlay
@@ -105,33 +113,29 @@ export function RobotFeed({
           style={mirrored ? { transform: "scaleX(-1)" } : undefined}
         />
       {fallbackFrameUrl && <img src={fallbackFrameUrl} onLoad={frame} onError={lostFeed} alt="Live robot camera, JPEG fallback" className="size-full object-cover" />}
-      {!stream && !fallbackFrameUrl && <EmptyFeed onPreviewWebcam={onPreviewWebcam} mediaState={mediaState} />}
+      {!stream && !fallbackFrameUrl && <EmptyFeed mediaState={mediaState} />}
 
-      <GuideLines />
+      {hasFeed && drive && <GuideLines />}
       {hasFeed && drive && <DriveRegions drive={drive} />}
 
       {/* Everything below sits above the regions (z-20), so clicking it never moves the robot. */}
-      <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-pine/85 px-3 py-1.5 text-xs font-semibold text-white">
+      {(stream || fallbackFrameUrl || listening) && <div className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-full bg-pine/85 px-3 py-1.5 text-xs font-semibold text-white">
         <span>{listening ? "Someone is speaking…" : `Robot video · ${mediaState}`}</span>
-        {stream && <button type="button" className="rounded-full bg-white/15 px-2 py-1" onClick={() => {
+        {stream && <VideoTool className="bg-white/15 text-white" onSelect={() => {
           const nextMuted = playbackError ? false : !muted;
           setMuted(nextMuted);
           if (videoRef.current) {
             videoRef.current.muted = nextMuted;
             void videoRef.current.play().then(() => setPlaybackError(false), () => setPlaybackError(true));
           }
-        }}>{playbackError ? "Play audio" : muted ? "Enable audio" : "Mute audio"}</button>}
-      </div>
+        }}>{playbackError ? "Play audio" : muted ? "Enable audio" : "Mute audio"}</VideoTool>}
+      </div>}
       {hasFeed && drive && (
-        <button
-          type="button"
-          onClick={() => drive.stop(true)}
-          aria-label="Stop the robot"
-          className="absolute top-3 right-3 z-20 flex items-center gap-1.5 rounded-full bg-tomato px-4 py-2 text-sm font-bold text-white shadow-[0_8px_20px_-6px_rgb(228_85_63/0.7)] transition-transform hover:scale-105 active:scale-95"
-        >
-          <Octagon className="size-4" strokeWidth={2.75} />
-          Stop
-        </button>
+        <div className="absolute right-3 top-3 z-20">
+          <VideoTool onSelect={() => drive.stop(true)} label="Stop the robot" className="bg-tomato text-white">
+            <Octagon className="size-4" strokeWidth={2.75} />Stop
+          </VideoTool>
+        </div>
       )}
       <div className={localCamera ? "absolute right-4 bottom-4 z-20 w-36 overflow-hidden rounded-xl bg-pine shadow-lg ring-1 ring-white/25 sm:w-48" : "hidden"}>
         <video ref={localRef} autoPlay playsInline muted aria-label="Your camera shared with the phone" className="aspect-video w-full object-cover" />
@@ -153,7 +157,8 @@ export function RobotFeed({
         </div>
       )}
 
-    </div>
+      </div>
+    </section>
   );
 }
 
@@ -270,22 +275,13 @@ function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] &
   </button>;
 }
 
-function EmptyFeed({ onPreviewWebcam, mediaState }: { onPreviewWebcam: () => void; mediaState: RobotStream["state"] }) {
+function EmptyFeed({ mediaState }: { mediaState?: RobotStream["state"] }) {
   return (
-    <div className="absolute inset-0 grid size-full place-items-center">
-      <div className="flex max-w-sm flex-col items-center px-6 text-center">
-        <IrisMark size={72} />
-        <h2 className="mt-5 font-display text-2xl font-bold text-white">{mediaState === "failed" ? "Robot video unavailable" : "Waiting for the robot’s camera"}</h2>
-        <p className="mt-2 text-[15px] leading-relaxed text-white/60">
-                Sign in with the same Google email on your phone, start IRIS, then click Connect phone. Its camera appears here; your laptop camera is shared to the phone.
-        </p>
-        <button
-          onClick={onPreviewWebcam}
-          className="mt-6 flex items-center gap-2 rounded-full bg-white/10 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-white/15 transition-colors hover:bg-white/15"
-        >
-          <Video className="size-4" />
-          Share this laptop’s camera with the phone
-        </button>
+    <div className="absolute inset-0 grid place-items-center p-4">
+      <div className="max-w-sm text-center">
+        <VideoOff aria-hidden className="mx-auto mb-3 size-9 text-white/55" strokeWidth={1.5} />
+        <p className="font-display text-xl font-semibold text-white/90">{mediaState === "failed" ? "Camera stream unavailable" : "Waiting for phone video"}</p>
+        <p className="mt-1 text-sm text-white/70">{mediaState === "failed" ? "Check the phone session and reconnect." : "Start the session on the mounted phone."}</p>
       </div>
     </div>
   );

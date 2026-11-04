@@ -215,3 +215,40 @@
     animation: none !important;
   }
 }
+
+/* The patient surface keeps targets large while leaving the video unobstructed. */
+.patient-stage {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  gap: clamp(0.65rem, 1.25vw, 1.25rem);
+  grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr);
+}
+.patient-tool, .patient-video-tool {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  min-height: 2.75rem;
+  border-radius: 1rem;
+  padding: .5rem 1rem;
+  font-size: .95rem;
+  font-weight: 650;
+}
+.patient-tool { background: var(--surface); color: var(--pine); }
+.patient-action-card { flex-direction: column; gap: clamp(.3rem, 1vh, .85rem); padding: .8rem; }
+.patient-card-icon { width: clamp(2.5rem, 6vh, 4rem); aspect-ratio: 1; }
+@media (max-width: 700px) and (orientation: portrait) {
+  .patient-console { min-height: 36rem; }
+  .patient-stage { grid-template-columns: 1fr; grid-template-rows: minmax(12rem, 1.12fr) minmax(15rem, 1fr); }
+  .patient-action-card { flex-direction: row; gap: .85rem; }
+  .patient-card-hint { max-width: 34%; }
+  .patient-tool { padding-inline: .65rem; }
+}
+@media (max-height: 600px) and (orientation: landscape) {
+  .patient-action-card { flex-direction: row; }
+  .patient-card-hint { display: none; }
+  .patient-card-icon { width: 2.2rem; }
+}

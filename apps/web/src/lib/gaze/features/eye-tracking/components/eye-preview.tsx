@@ -1090,7 +1090,8 @@ export function EyePreview({
           <div className={`eye-camera-outline ${EyeCameraOutlineStyles}`}>
             <Camera size={30} strokeWidth={1.2} />
           </div>
-          <p>No camera connected</p>
+          <h2>Camera preview</h2>
+          <p>Connect the eye camera to see its view.</p>
         </div>
       )}
     </div>

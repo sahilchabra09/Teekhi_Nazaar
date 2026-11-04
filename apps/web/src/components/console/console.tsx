@@ -1,6 +1,6 @@
 "use client";
 
-import { Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, Square, TriangleAlert, Volume2, X } from "lucide-react";
+import { Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, Settings2, Square, TriangleAlert, Volume2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -19,11 +19,12 @@ import { TalkApiError, talkApi } from "@/lib/talk/api";
 import { UtteranceRecorder } from "@/lib/talk/recorder";
 import { speakAloud, stopSpeaking } from "@/lib/talk/speak";
 
+import { useDwell } from "./use-dwell";
 import { ConnectionBar } from "./connection-bar";
-import { ControlSettingsDialog, ControlsChip } from "./control-settings";
-import { MicPicker, readSavedMic } from "./mic-picker";
+import { ControlSettingsDialog } from "./control-settings";
+import { readSavedMic } from "./mic-picker";
 import { RobotFeed } from "./robot-feed";
-import { ScreenGazeControls } from "./screen-gaze-controls";
+import { ScreenGazeControls, type PatientMode } from "./screen-gaze-controls";
 import { type PanelCard, SidePanel } from "./side-panel";
 
 const QUICK_PHRASES = ["Please come here.", "I need some help.", "Could you repeat that?"];
@@ -31,6 +32,7 @@ const TONES = ["teal", "honey", "sky"] as const;
 
 export default function Console({ userName }: { userName: string }) {
   const router = useRouter();
+  const [mode, setMode] = useState<PatientMode>("manual");
   const connection = useRobotConnection();
   const [conversation, dispatch] = useReducer(conversationReducer, initialConversation);
   const { view } = conversation;
@@ -86,8 +88,7 @@ export default function Console({ userName }: { userName: string }) {
   const [driver] = useState(() => new DrivePublisher(
     intent => broker.publish(DRIVE_TOPIC, intent),
     () => available.current && performance.now() - frameAt.current < 1500 &&
-      broker.getSnapshot().status === "connected" && document.visibilityState === "visible" &&
-      !document.querySelector('dialog[open], [aria-modal="true"]'),
+      broker.getSnapshot().status === "connected" && document.visibilityState === "visible" && document.hasFocus(),
   ));
   const [driveStatus, setDriveStatus] = useState<"ready" | "retry-stop" | "waiting">("waiting");
   const ready = driveStatus === "ready";
@@ -99,11 +100,11 @@ export default function Console({ userName }: { userName: string }) {
   const stop = useCallback((explicit = false) => { void driver.stop(explicit); }, [driver]);
 
   useLayoutEffect(() => {
-    available.current = connected && hasFeed && !settings.open && !signingOut;
+    available.current = mode !== "setup" && view.name === "drive" && connected && hasFeed && !settings.open && !signingOut;
     if (!available.current) void driver.stop();
     if (!connected) driver.revoke();
     if (!hasFeed) frameAt.current = -Infinity;
-  }, [driver, connected, hasFeed, settings.open, signingOut]);
+  }, [driver, mode, view.name, connected, hasFeed, settings.open, signingOut]);
 
   useEffect(() => {
     const hub = connection.hub;
@@ -401,6 +402,20 @@ export default function Console({ userName }: { userName: string }) {
     });
   }
 
+  const changeMode = useCallback((next: PatientMode) => {
+    // Leaving the control surface cancels recording, speech, and drive holds.
+    if (next !== "live") {
+      stop();
+      abortWork();
+      stopSpeaking();
+      endConversation();
+    }
+    setMode(next);
+  }, [stop, abortWork, endConversation]);
+
+  const settingsButton = useDwell(() => openSettings());
+  const signOutButton = useDwell(() => void signOut(), { ms: 1500, disabled: signingOut });
+
   // ───────────────────────────── panel content per view ─────────────────────────────
 
   const home: View = { name: "home" };
@@ -416,23 +431,20 @@ export default function Console({ userName }: { userName: string }) {
         {
           kind: "action",
           key: "drive",
-          title: hasFeed ? "Drive from the video" : "Driving: no video",
-          hint: !hasFeed ? "Connect the robot phone first" : active ? "Driving · look away to stop" :
-            driveStatus === "retry-stop" ? "Press Stop again to confirm" : ready ? "Hold a direction · look away to stop" : "Calibrate and enable drive on the phone",
+          title: "Drive",
+          hint: hasFeed ? "Open directional controls" : "Connect the phone to drive",
           icon: Navigation,
-          tone: ready || active ? "teal" : "plain",
-          onSelect: () => toast(driveStatus === "retry-stop" ? "Select the red Stop button, then enable driving on the phone." : ready || active
-            ? "Look at a direction for 0.9 seconds or press and hold. Let go or look away to stop."
-            : "Connect the phone camera, fetch a drive session, calibrate, and enable driving on the phone."),
+          tone: "teal",
+          onSelect: () => setView({ name: "drive" }),
         },
         {
           kind: "action",
           key: "talk",
-          title: "Say something",
-          hint: "Listen and suggest replies",
+          title: "Communicate",
+          hint: "Choose a phrase or listen and reply",
           icon: MessageSquareText,
           tone: "honey",
-          onSelect: () => void startListening(),
+          onSelect: () => setView({ name: "communicate" }),
         },
         {
           kind: "action",
@@ -443,6 +455,29 @@ export default function Console({ userName }: { userName: string }) {
           tone: "sky",
           onSelect: () => setView({ name: "appliances" }),
         },
+      ];
+      break;
+
+    case "drive":
+      heading = "Drive the car";
+      back = { label: "Actions", onSelect: goHome };
+      cards = [
+        { kind: "preview", key: "drive-help",
+          text: !hasFeed ? "Connect the robot phone" : ready || active ? "Look at a direction on the video" : "Waiting for drive access",
+          hint: !hasFeed ? "Use Connect phone in the video panel to open the robot camera." :
+            driveStatus === "retry-stop" ? "Select Stop again to confirm." :
+            ready || active ? "Hold for 0.9 seconds. Look away to stop." : "On the mounted phone, calibrate, authorize the session and enable driving." },
+        { kind: "action", key: "stop", title: "Stop driving", icon: Square, tone: "honey", onSelect: () => stop(true), disabled: !connected },
+        { kind: "action", key: "actions", title: "Back to actions", tone: "plain", onSelect: goHome },
+      ];
+      break;
+
+    case "communicate":
+      heading = "Communicate";
+      back = { label: "Actions", onSelect: goHome };
+      cards = [
+        { kind: "action", key: "phrases", title: "Quick phrases", hint: "Choose words to speak", icon: MessageSquareText, tone: "honey", onSelect: () => setView({ name: "phrases" }) },
+        { kind: "action", key: "listen", title: "Listen and reply", hint: "Listen to someone and choose a reply", icon: Ear, tone: "teal", onSelect: () => void startListening() },
       ];
       break;
 
@@ -574,17 +609,25 @@ export default function Console({ userName }: { userName: string }) {
           : conversation.heard;
 
   return (
-    <main className="flex h-svh flex-col gap-3 overflow-y-auto bg-mist p-3">
-      <ConnectionBar connection={connection} />
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[minmax(0,4fr)_minmax(14rem,1fr)]">
-        {/* left: camera fills the whole height */}
-        <div className="min-h-[55vh] md:min-h-0">
+    <main aria-label="Patient dashboard" className="patient-console flex h-dvh flex-col gap-3 bg-mist p-3 text-pine md:gap-4 md:p-4">
+      <header aria-label="Patient bar" className="patient-bar flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-1">
+        <div className="mr-auto flex min-w-0 items-center gap-2">
+          <IrisMark size={38} />
+          <h1 className="truncate font-display text-2xl font-bold" title={userName}>{userName}</h1>
+        </div>
+        <ScreenGazeControls mode={mode} setMode={changeMode} />
+        <button type="button" ref={settingsButton.ref} {...settingsButton.props} aria-haspopup="dialog"
+          className="patient-tool"><span className="dwell-fill" /><Settings2 aria-hidden className="relative size-5" /><span className="relative">Settings</span></button>
+        <button type="button" ref={signOutButton.ref} {...signOutButton.props} disabled={signingOut}
+          className="patient-tool"><span className="dwell-fill" /><LogOut aria-hidden className="relative size-5" /><span className="relative">Sign out</span></button>
+      </header>
+      <section aria-label={mode === "live" ? "Gaze control overlay" : "Patient controls"} className="patient-stage">
           <RobotFeed
             stream={connection.media.remote}
             localCamera={connection.camera}
             fallbackFrameUrl={connection.media.fallbackFrameUrl}
             mediaState={connection.media.state}
-            drive={{ enabled: ready || active !== null, active, start, release, stop, frame, lostFeed }}
+            drive={view.name === "drive" ? { enabled: ready || active !== null, active, start, release, stop, frame, lostFeed } : undefined}
             heard={heard}
             heardLabel={
               view.name === "suggestions" && view.lowConfidence
@@ -595,43 +638,19 @@ export default function Console({ userName }: { userName: string }) {
             }
             status={feedStatus}
             listening={conversation.activeSpeech || (view.name === "listening" && view.speaking)}
-            onPreviewWebcam={() => void connection.openCamera()}
+            menu={<ConnectionBar connection={connection} />}
           />
-        </div>
 
-        {/* right: three cards */}
         <SidePanel
           heading={heading}
           back={back}
           extra={extra}
           cards={cards}
-          footer={
-            <div className="flex flex-col gap-1 px-1 pt-1">
-              <ScreenGazeControls />
-              {/* Show the actual capture source; never silently switch a connected phone to laptop audio. */}
-              <div className="flex min-w-0 items-center justify-between gap-1">
-                {connection.phone ? <span className="text-xs text-pine-soft">Listening source: phone microphone</span>
-                  : <MicPicker value={micId} onChange={setMicId} refreshKey={micListVersion} />}
-                <ControlsChip onOpen={() => openSettings()} />
-              </div>
-              <div className="flex items-center gap-2">
-                <IrisMark size={26} />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-pine-soft">{userName}</span>
-                <button
-                  onClick={signOut}
-                  disabled={signingOut}
-                  aria-label="Sign out"
-                  title="Sign out"
-                  className="grid size-8 place-items-center rounded-full text-pine-soft transition-colors hover:bg-white hover:text-pine"
-                >
-                  <LogOut className="size-4" />
-                </button>
-              </div>
-            </div>
-          }
+          home={view.name === "home"}
         />
-      </div>
-      <ControlSettingsDialog open={settings.open} reason={settings.reason} onClose={() => setSettings({ open: false, reason: null })} />
+      </section>
+      <ControlSettingsDialog open={settings.open} reason={settings.reason} onClose={() => setSettings({ open: false, reason: null })}
+        micId={micId} onMicChange={setMicId} micListVersion={micListVersion} connection={connection} />
     </main>
   );
 }

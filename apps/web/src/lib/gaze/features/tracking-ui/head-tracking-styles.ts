@@ -1,17 +1,5 @@
 /** Static Tailwind primitives for head tracking presentation. */
 
-export const EyeHeaderStyles = `
-  [flex:0_0_56px] [height:56px] [padding:0_4%] [border-bottom:1px_solid_var(--line)]
-  flex items-center justify-between [background:var(--card)]
-  max-[650px]:[flex-basis:48px] max-[650px]:[height:48px] max-[650px]:[padding:0_14px] [@media(max-height:_760px)]:[flex-basis:48px]
-  [@media(max-height:_760px)]:[height:48px]
-`
-
-export const EyeHeaderRightStyles = `
-  flex items-center [gap:25px] [color:var(--dim)]
-  max-[650px]:[gap:15px] max-[640px]:[&:has(.remote-trial-link)_.eye-local]:hidden
-`
-
 export const EyeHeadSetupStyles = `
   grid [gap:12px] [&_p]:[margin:0] [&_.eye-head-preview]:[margin-bottom:0]
   [&_.eye-button]:w-auto

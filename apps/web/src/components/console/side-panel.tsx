@@ -40,13 +40,13 @@ type Props = {
   cards: PanelCard[];
   /** Custom content instead of the three cards (e.g. the appliance grid). */
   children?: React.ReactNode;
-  footer?: React.ReactNode;
+  home?: boolean;
 };
 
-export function SidePanel({ heading, back, extra, cards, children, footer }: Props) {
+export function SidePanel({ heading, back, extra, cards, children, home }: Props) {
   return (
-    <aside className="flex h-full min-h-0 flex-col gap-3" aria-label="Actions">
-      <div className="flex min-h-10 items-center justify-between gap-2 px-1">
+    <aside className="patient-actions flex min-h-0 min-w-0 flex-col" aria-label="Actions">
+      <div className={home ? "sr-only" : "mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 px-1"}>
         <h2 className="font-display text-lg leading-tight font-bold text-pine">{heading}</h2>
         <div className="flex shrink-0 items-center gap-2">
           {extra && <Pill {...extra} icon={extra.icon ?? "refresh"} />}
@@ -55,14 +55,13 @@ export function SidePanel({ heading, back, extra, cards, children, footer }: Pro
       </div>
 
       {children ?? (
-        <div className="flex min-h-0 flex-1 flex-col gap-5 px-1 pb-2">
+        <div className="flex min-h-0 flex-1 flex-col gap-2.5 md:gap-4">
           {cards.map((c) =>
             c.kind === "preview" ? <PreviewCard key={c.key} card={c} /> : <ActionCard key={c.key} card={c} />,
           )}
         </div>
       )}
 
-      {footer}
     </aside>
   );
 }
@@ -84,18 +83,18 @@ function ActionCard({ card }: { card: Extract<PanelCard, { kind: "action" }> }) 
       ref={ref}
       {...props}
       disabled={card.disabled}
-      className={`clay-press relative flex min-h-0 flex-1 basis-0 flex-col items-center justify-center gap-3 overflow-hidden rounded-[2.25rem] px-5 py-4 text-center ${TONE_CLASS[card.tone]}`}
+      className={`patient-action-card clay-press relative flex min-h-0 flex-1 basis-0 items-center justify-center overflow-hidden rounded-[1.75rem] text-center ${TONE_CLASS[card.tone]}`}
     >
       <span className="dwell-fill" />
       {Icon && (
-        <span className="relative grid size-14 shrink-0 place-items-center rounded-2xl bg-white/25 shadow-[inset_2px_3px_6px_rgb(255_255_255/0.5),inset_-2px_-3px_6px_rgb(0_0_0/0.1)]">
+        <span className="patient-card-icon relative grid shrink-0 place-items-center rounded-2xl bg-white/25 shadow-[inset_2px_3px_6px_rgb(255_255_255/0.5),inset_-2px_-3px_6px_rgb(0_0_0/0.1)]">
           <Icon className="size-7" strokeWidth={2.5} />
         </span>
       )}
-      <span className="relative font-display text-[clamp(1.15rem,1.6vw,1.6rem)] leading-tight font-bold text-balance">
+      <span className="relative font-display text-[clamp(1.15rem,2.3vw,2.6rem)] leading-tight font-bold text-balance">
         {card.title}
       </span>
-      {card.hint && <span className="relative text-sm leading-snug font-medium opacity-80">{card.hint}</span>}
+      {card.hint && <span className="patient-card-hint relative text-sm leading-snug font-medium opacity-90">{card.hint}</span>}
     </button>
   );
 }

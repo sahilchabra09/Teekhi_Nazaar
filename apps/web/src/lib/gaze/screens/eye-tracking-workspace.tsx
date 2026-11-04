@@ -1,4 +1,4 @@
-import "./font/screen-font.css"
+import { useDwell } from "@/components/console/use-dwell"
 import { assessValidation } from "@/lib/gaze/features/tracking-calibration/validation-assessment"
 import { cameraGeometryIdentity } from "@/lib/gaze/features/tracking-calibration/camera-geometry"
 import { useScreenGeometry } from "@/lib/gaze/features/tracking-calibration/use-screen-geometry"
@@ -22,7 +22,7 @@ import type {
   CalibrationContext,
   CalibrationPayload,
 } from "@/lib/gaze/features/tracking-calibration/calibration-profiles.types"
-import { TrackingBrand } from "@/lib/gaze/features/tracking-ui/tracking-brand"
+import { IrisMark } from "@/components/iris/logo"
 import {
   evaluateScreenValidation,
   screenValidationReadings,
@@ -71,21 +71,15 @@ import {
   EyeAppStyles,
   EyeBottomBarStyles,
   EyeFormatsStyles,
-  EyeLocalStyles,
   EyePreviewCardStyles,
   EyePreviewColumnStyles,
   EyeTitleRowStyles,
   EyeWorkspaceStyles,
-  StatusLightStyles,
 } from "../features/tracking-ui/layout-styles"
 import {
   EyeButtonStyles,
   EyeDetailsStyles,
 } from "../features/tracking-ui/control-styles"
-import {
-  EyeHeaderRightStyles,
-  EyeHeaderStyles,
-} from "../features/tracking-ui/head-tracking-styles"
 import {
   EyeModelLockStatusStyles,
   EyePipelineDetailsStyles,
@@ -102,8 +96,9 @@ const STEPS: readonly SetupStepName[] = [
   "Calibrate",
   "Live gaze",
 ]
+const STEP_TITLES = ["Connect your eye camera", "Frame your eye", "Build your eye model", "Add a head camera", "Calibrate your gaze", "Check your gaze"]
 const STEP_HELP: readonly string[] = [
-  "Connect a USB camera or paste an MJPEG / video stream URL. Processing stays in this browser.",
+  "Choose the camera that faces your eye, then connect it to see a live preview.",
   "Frame one eye. Keep the pupil’s full movement inside the box, with dark frame edges outside.",
   "Look left, right, up and down, then around the edges to build the eye model.",
   "Optional: connect a front camera. Calibration includes a short head-movement pass.",
@@ -111,7 +106,7 @@ const STEP_HELP: readonly string[] = [
   "Check your gaze, validate accuracy, recalibrate, or export a result.",
 ]
 export function EyeTrackingWorkspace({
-  onSample, onUse, onClose,
+  onSample, onUse, onClose, controlling, onSetupRequired,
 }: EyeTrackingWorkspaceProps) {
   const steps = STEPS
   const stepHelp = STEP_HELP
@@ -191,6 +186,11 @@ export function EyeTrackingWorkspace({
   }, [diagnostics, resetCalibrationState])
   if (calibration && !settings.locked) {
     resetCalibrationState()
+    if (!source) setStep(0)
+  }
+  if (validation !== null && tracker.connection !== "live") {
+    setValidation(null)
+    setValidationMetrics(null)
   }
   useEffect(() => {
     if (!settings.locked) {
@@ -212,10 +212,11 @@ export function EyeTrackingWorkspace({
   }, [diagnostics, geometry])
   useEffect(() => {
     setPreviewMasksEnabled(
-      !!source &&
+      !controlling && !!source &&
         (thresholdViewOpen || (pipelineOpen && step >= 2))
     )
   }, [
+    controlling,
     pipelineOpen,
     setPreviewMasksEnabled,
     source,
@@ -352,7 +353,17 @@ export function EyeTrackingWorkspace({
   )
   const onscreen = screenPoint && screenPoint.every((v) => v >= 0 && v <= 1)
   const verified = !!calibration && validation !== null && settings.locked && !!source &&
-    source.kind !== "sample" && source.kind !== "video" && !capture && !fitting && step === 5
+    tracker.connection === "live" && source.kind !== "sample" && source.kind !== "video" &&
+    !capture && !fitting && step === 5
+  const showHandoff = step === 5 && !capture && !focus && !controlling
+  const canContinueWithGaze = showHandoff && verified
+  const dashboard = useDwell(onUse, { disabled: !canContinueWithGaze })
+  useEffect(() => {
+    if (showHandoff) dashboard.ref.current?.focus()
+  }, [showHandoff, dashboard.ref])
+  useEffect(() => {
+    if (controlling && !verified) onSetupRequired()
+  }, [controlling, verified, onSetupRequired])
   const x = screenPoint?.[0], y = screenPoint?.[1]
   useEffect(() => {
     const time = gazeReading.timestamp
@@ -596,7 +607,10 @@ export function EyeTrackingWorkspace({
     setCapture("calibration")
   }
   useEffect(() => {
+    const width = window.innerWidth
+    const height = window.innerHeight
     const resized = () => {
+      if (width === window.innerWidth && height === window.innerHeight) return
       if (!calibration && !capture && !focus) {
         return
       }
@@ -683,59 +697,50 @@ export function EyeTrackingWorkspace({
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
+  // The camera, worker and calibration belong to this workspace. Only its
+  // setup views are removed while the dashboard consumes measured frames.
+  if (controlling) return null
+
   return (
     <main
       className={`eye-app ${EyeAppStyles}`}
     >
       <EyeTooltipLayer />
-      <header className={`eye-header ${EyeHeaderStyles}`}>
-        <TrackingBrand version="SCREEN 1" />
-        <div className={`eye-header-right ${EyeHeaderRightStyles}`}>
-          <button type="button" className={`eye-button ${EyeButtonStyles}`} onClick={onClose}>Close tracker</button>
-          <button type="button" className={`eye-button primary ${EyeButtonStyles}`} disabled={!verified} onClick={onUse}>Use gaze in console</button>
-          <span className={`eye-local ${EyeLocalStyles}`}>
-            <span className={`status-light ${StatusLightStyles} on`} />
-            On-device processing
-          </span>
+      <header className={EyeTitleRowStyles}>
+        <IrisMark size={44} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold text-pine-soft">Patient dashboard</p>
+          <h1 className="font-display text-2xl font-bold leading-tight sm:text-3xl">Eye tracking setup</h1>
         </div>
+        <button type="button" aria-label={verified ? "Stop tracking" : "Close tracker"} className={`eye-button secondary ${EyeButtonStyles}`} onClick={onClose}>{verified ? "Stop tracking" : "Close"}</button>
       </header>
-      <div className={`eye-title-row ${EyeTitleRowStyles}`}>
-        <div>
-          <h1>
-            Screen eye tracking
-          </h1>
-        </div>
-        <div
-          className={`eye-formats ${EyeFormatsStyles}`}
-          aria-label="Tracker format"
-        >
-          {(["classic", "spatial"] as const).map((format, i) => (
+      {showHandoff && (
+        <section aria-labelledby="dashboard-handoff-title" className="mx-auto w-full max-w-6xl px-4 pb-5 sm:px-8">
+          <div className="clay flex flex-col gap-4 rounded-3xl bg-surface p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+            <div>
+              <h2 id="dashboard-handoff-title" className="font-display text-2xl font-bold">
+                {verified ? "Your gaze is ready" : "Gaze control is off"}
+              </h2>
+              <p className="mt-1 text-pine-soft">
+                {verified
+                  ? "Look at the button for a moment, or click it to open your dashboard."
+                  : "You can open the dashboard with touch or a mouse. To use gaze, complete the accuracy check with a live eye camera."}
+              </p>
+            </div>
             <button
-              key={format}
-              aria-label={`Eye Tracker ${i + 1}: ${i === 0 ? "Manual" : "Auto"} tracking`}
-              title={i === 0 ? "Manual eye model" : "Automatic eye model"}
-              aria-pressed={settings.format === format}
-              onClick={() => {
-                if (format === settings.format) {
-                  return
-                }
-                update({ format })
-                setStep(0)
-                setRegionStepComplete(false)
-                setCorner(null)
-                setManualCornerMode(null)
-              }}
+              type="button"
+              ref={dashboard.ref}
+              {...(canContinueWithGaze ? dashboard.props : { onClick: onClose })}
+              data-gaze-continue={canContinueWithGaze ? "" : undefined}
+              className="relative flex min-h-16 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-2xl bg-pine px-6 text-lg font-bold text-white"
             >
-              {i === 0 ? (
-                <Eye size={16} aria-hidden="true" />
-              ) : (
-                <ScanEye size={16} aria-hidden="true" />
-              )}
-              <span>{i === 0 ? "Manual" : "Auto"}</span>
+              <span className="dwell-fill" />
+              <span className="relative">Continue to dashboard</span>
+              <ArrowRight className="relative size-5" aria-hidden="true" />
             </button>
-          ))}
-        </div>
-      </div>
+          </div>
+        </section>
+      )}
       <SetupStepNavigation
         steps={steps}
         activeStep={step}
@@ -756,63 +761,9 @@ export function EyeTrackingWorkspace({
       <div
         className={`eye-workspace ${EyeWorkspaceStyles}`}
       >
-        <section
-          className={`eye-preview-column ${EyePreviewColumnStyles}`}
-          aria-label="Eye preview and tuning"
-        >
-          <ThresholdControls tracker={tracker} update={update} />
-          <div
-            className={`eye-preview-card ${EyePreviewCardStyles} ${source ? "has-source" : "is-empty"}`}
-          >
-            <EyePreview
-              tracker={tracker}
-              showModel={step >= 2}
-              selectRegion={step === 1}
-              cornerMode={activeCornerMode}
-              pendingCorner={corner}
-              onRegion={chooseRegion}
-              onCorner={chooseCorner}
-              onCornerModeChange={changeManualCornerMode}
-              onMoveCorners={moveCorners}
-              onMovePendingCorner={setCorner}
-              onEditRegion={() => {
-                setStep(1)
-                setNotice("")
-              }}
-              onThresholdViewChange={setThresholdViewOpen}
-              onTransformChange={() => {
-                resetSource()
-                setStep(1)
-                setNotice(
-                  "Camera orientation changed. Select the eye region and rebuild the eye model."
-                )
-              }}
-            />
-            <details
-              className={`eye-details ${EyeDetailsStyles} eye-pipeline-details ${EyePipelineDetailsStyles}`}
-              hidden={!source || step < 2}
-              onToggle={(event) => setPipelineOpen(event.currentTarget.open)}
-            >
-              <summary>
-                {settings.format === "spatial"
-                  ? "Threshold comparison"
-                  : "Pupil segmentation"}
-                <span>
-                  {frame?.detection.ellipse
-                    ? Math.round(frame.detection.ellipse.confidence * 100) +
-                      "% fit"
-                    : "No pupil"}
-                </span>
-              </summary>
-              {pipelineOpen && source && step >= 2 && (
-                <PipelinePreviews frame={frame} />
-              )}
-            </details>
-          </div>
-        </section>
         {(
           <SetupStepPanel
-            stepName={steps[step]}
+            stepName={STEP_TITLES[step]}
             description={stepDescription}
             error={tracker.error}
             message={notice}
@@ -959,65 +910,155 @@ export function EyeTrackingWorkspace({
                 onExport={exportResult}
               />
             )}
+            {(step > 0 || source) && (
+              <footer
+                className={`eye-bottom-bar ${EyeBottomBarStyles} ${step === 2 ? "has-model-status" : ""}`}
+              >
+                <div>
+                  {step > 0 && (
+                    <button
+                      className={`eye-button ${EyeButtonStyles} secondary`}
+                      onClick={() => setStep(step - 1)}
+                    >
+                      <ArrowLeft size={15} />
+                      Back
+                    </button>
+                  )}
+                  {step === 2 && (
+                    <span
+                      className={`eye-model-lock-status ${EyeModelLockStatusStyles}`}
+                      id="eye-model-lock-status"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {modelLockStatus.blocker === "waiting" && "Waiting for pupil"}
+                      {modelLockStatus.blocker === "corners" &&
+                        "Place two separate eye corners"}
+                      {modelLockStatus.blocker === "samples" &&
+                        `Stable samples ${frame?.model?.samples ?? 0}/30`}
+                      {modelLockStatus.blocker === "coverage" &&
+                        `Coverage ${modelLockStatus.coveredDirections}/8 · needs ${modelLockStatus.requiredDirections}`}
+                      {modelLockStatus.blocker === "radius" &&
+                        "Check the eye region, then rebuild"}
+                      {modelLockStatus.blocker === "fit" && "Keep gaze steady"}
+                      {modelLockStatus.blocker === "ready" && "Model ready"}
+                    </span>
+                  )}
+                  {step <= 3 && (
+                    <button
+                      className={`eye-button ${EyeButtonStyles} primary`}
+                      disabled={continueDisabled}
+                      aria-describedby={
+                        step === 2 ? "eye-model-lock-status" : undefined
+                      }
+                      onClick={() => {
+                        if (step === 1) {
+                          setRegionStepComplete(true)
+                        }
+                        if (step === 2) {
+                          configure({ locked: true }, false)
+                        }
+                        setStep((s) => s + 1)
+                      }}
+                    >
+                      {step === 2 ? "Lock model" : "Continue"}
+                      <ArrowRight size={16} />
+                    </button>
+                  )}
+                </div>
+              </footer>
+            )}
+            <details className="mt-5 border-t border-pine/10 pt-3">
+              <summary className="cursor-pointer py-2 text-sm font-semibold text-teal">Camera tuning</summary>
+              <p className="mb-2 mt-3 text-sm font-semibold text-pine">Eye model</p>
+              <div
+                className={`eye-formats ${EyeFormatsStyles}`}
+                aria-label="Tracker format"
+              >
+                {(["classic", "spatial"] as const).map((format, i) => (
+                  <button
+                    key={format}
+                    aria-label={`Eye Tracker ${i + 1}: ${i === 0 ? "Manual" : "Auto"} tracking`}
+                    title={i === 0 ? "Manual eye model" : "Automatic eye model"}
+                    aria-pressed={settings.format === format}
+                    onClick={() => {
+                      if (format === settings.format) {
+                        return
+                      }
+                      update({ format })
+                      setStep(0)
+                      setRegionStepComplete(false)
+                      setCorner(null)
+                      setManualCornerMode(null)
+                    }}
+                  >
+                    {i === 0 ? (
+                      <Eye size={16} aria-hidden="true" />
+                    ) : (
+                      <ScanEye size={16} aria-hidden="true" />
+                    )}
+                    <span>{i === 0 ? "Manual" : "Auto"}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4"><ThresholdControls tracker={tracker} update={update} /></div>
+            </details>
           </SetupStepPanel>
         )}
-      </div>
-      <footer
-        className={`eye-bottom-bar ${EyeBottomBarStyles} ${step === 2 ? "has-model-status" : ""}`}
-      >
-        <div>
-          {step > 0 && (
-            <button
-              className={`eye-button ${EyeButtonStyles} secondary`}
-              onClick={() => setStep(step - 1)}
-            >
-              <ArrowLeft size={15} />
-              Back
-            </button>
-          )}
-          {step === 2 && (
-            <span
-              className={`eye-model-lock-status ${EyeModelLockStatusStyles}`}
-              id="eye-model-lock-status"
-              role="status"
-              aria-live="polite"
-            >
-              {modelLockStatus.blocker === "waiting" && "Waiting for pupil"}
-              {modelLockStatus.blocker === "corners" &&
-                "Place two separate eye corners"}
-              {modelLockStatus.blocker === "samples" &&
-                `Stable samples ${frame?.model?.samples ?? 0}/30`}
-              {modelLockStatus.blocker === "coverage" &&
-                `Coverage ${modelLockStatus.coveredDirections}/8 · needs ${modelLockStatus.requiredDirections}`}
-              {modelLockStatus.blocker === "radius" &&
-                "Check the eye region, then rebuild"}
-              {modelLockStatus.blocker === "fit" && "Keep gaze steady"}
-              {modelLockStatus.blocker === "ready" && "Model ready"}
-            </span>
-          )}
-          {step <= 3 && (
-            <button
-              className={`eye-button ${EyeButtonStyles} primary`}
-              disabled={continueDisabled}
-              aria-describedby={
-                step === 2 ? "eye-model-lock-status" : undefined
-              }
-              onClick={() => {
-                if (step === 1) {
-                  setRegionStepComplete(true)
-                }
-                if (step === 2) {
-                  configure({ locked: true }, false)
-                }
-                setStep((s) => s + 1)
+        <section
+          className={`eye-preview-column ${EyePreviewColumnStyles}`}
+          aria-label="Eye camera preview"
+        >
+          <div
+            className={`eye-preview-card ${EyePreviewCardStyles} ${source ? "has-source" : "is-empty"}`}
+          >
+            <EyePreview
+              tracker={tracker}
+              showModel={step >= 2}
+              selectRegion={step === 1}
+              cornerMode={activeCornerMode}
+              pendingCorner={corner}
+              onRegion={chooseRegion}
+              onCorner={chooseCorner}
+              onCornerModeChange={changeManualCornerMode}
+              onMoveCorners={moveCorners}
+              onMovePendingCorner={setCorner}
+              onEditRegion={() => {
+                setStep(1)
+                setNotice("")
               }}
+              onThresholdViewChange={setThresholdViewOpen}
+              onTransformChange={() => {
+                resetSource()
+                setStep(1)
+                setNotice(
+                  "Camera orientation changed. Select the eye region and rebuild the eye model."
+                )
+              }}
+            />
+            <details
+              className={`eye-details ${EyeDetailsStyles} eye-pipeline-details ${EyePipelineDetailsStyles}`}
+              hidden={!source || step < 2}
+              onToggle={(event) => setPipelineOpen(event.currentTarget.open)}
             >
-              {step === 2 ? "Lock model" : "Continue"}
-              <ArrowRight size={16} />
-            </button>
-          )}
-        </div>
-      </footer>
+              <summary>
+                {settings.format === "spatial"
+                  ? "Threshold comparison"
+                  : "Pupil segmentation"}
+                <span>
+                  {frame?.detection.ellipse
+                    ? Math.round(frame.detection.ellipse.confidence * 100) +
+                      "% fit"
+                    : "No pupil"}
+                </span>
+              </summary>
+              {pipelineOpen && source && step >= 2 && (
+                <PipelinePreviews frame={frame} />
+              )}
+            </details>
+          </div>
+        </section>
+      </div>
       {capture && (
         <CalibrationOverlay
           key={capture}
