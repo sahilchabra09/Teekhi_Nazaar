@@ -66,3 +66,17 @@ test("the default gaze hold reports measured progress and selects at 1.2 seconds
   expect(action.events).toEqual(["enter", "select"]);
   expect(progress.at(-1)).toBe(1);
 });
+
+test("a gated card still shows timed progress and becoming available needs a fresh fixation", () => {
+  const dwell = new ScreenDwell(), card = button();
+  card.target.dataset.gazeDwell = "1200";
+  for (const t of [0, 300, 600, 900, 1200]) {
+    expect(dwell.update(card.target, 50, 50, t, false)).toBe(t / 1200);
+  }
+  expect(card.events).not.toContain("select");
+  for (let t = 1300; t <= 2800; t += 100) dwell.update(card.target, 50, 50, t, true);
+  expect(card.events).not.toContain("select");
+  dwell.update(null, 110, 50, 2900);
+  for (let t = 3000; t <= 4200; t += 100) dwell.update(card.target, 50, 50, t, true);
+  expect(card.events.filter(event => event === "select")).toHaveLength(1);
+});

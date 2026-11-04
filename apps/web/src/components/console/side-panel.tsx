@@ -72,6 +72,7 @@ export function ActionCard({ card }: { card: PanelAction }) {
       aria-pressed={card.pressed}
       data-gaze-preview={card.previewNavigation ? "" : undefined}
       data-gaze-require-entry={card.requireEntry ? "" : undefined}
+      data-gaze-unavailable={card.disabled ? card.hint : undefined}
       disabled={card.disabled}
       className={`patient-action-card clay-press relative flex min-h-0 flex-1 basis-0 items-center justify-center overflow-hidden rounded-[1.75rem] text-center ${TONE_CLASS[card.tone]}`}
     >

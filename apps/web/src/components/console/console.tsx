@@ -87,6 +87,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
   const hasFeed = Boolean((connection.media.state === "live" && connection.media.remote) ||
     (connection.media.state === "fallback" && connection.media.fallbackFrameUrl));
   const connected = connection.status === "connected" && connection.phone;
+  const driveSurface = useRef(false);
   const available = useRef(false);
   const frameAt = useRef(-Infinity);
   const [driver] = useState(() => new DrivePublisher(
@@ -94,18 +95,28 @@ export default function Console({ userName, appliancePassword }: { userName: str
     () => available.current && performance.now() - frameAt.current < 1500 &&
       broker.getSnapshot().status === "connected" && document.visibilityState === "visible" && document.hasFocus(),
   ));
-  const [ready, setReady] = useState(false);
+  const [canAim, setCanAim] = useState(false);
   const [stopState, setStopState] = useState<StopState>("unavailable");
   const [active, setActive] = useState<Direction | null>(null);
   const frame = useCallback(() => { frameAt.current = performance.now(); }, []);
-  const lostFeed = useCallback(() => { frameAt.current = -Infinity; void driver.stop(); }, [driver]);
+  const stopInDrive = useCallback(() => {
+    if (driveSurface.current) void driver.stop();
+  }, [driver]);
+  const lostFeed = useCallback(() => {
+    frameAt.current = -Infinity;
+    stopInDrive();
+  }, [stopInDrive]);
   const start = useCallback((action: Direction, source: DriveSource) => { void driver.start(action, source); }, [driver]);
   const release = useCallback((action: DriveAction, source?: DriveSource) => { void driver.release(action, source); }, [driver]);
-  const stop = useCallback((explicit = false) => { void driver.stop(explicit); }, [driver]);
+  const stop = useCallback(() => { void driver.stop(); }, [driver]);
+  const center = useCallback(() => { void driver.center(); }, [driver]);
 
   useLayoutEffect(() => {
-    available.current = mode !== "setup" && view.name === "drive" && connected && hasFeed && !settingsOpen && !signingOut;
-    if (!available.current) void driver.stop();
+    const surface = view.name === "drive" && mode !== "setup" && !settingsOpen && !signingOut;
+    const nextAvailable = surface && connected && hasFeed;
+    if ((driveSurface.current && !surface) || (available.current && !nextAvailable)) void driver.stop();
+    driveSurface.current = surface;
+    available.current = nextAvailable;
     if (!connected) driver.revoke();
     if (!hasFeed) frameAt.current = -Infinity;
   }, [driver, mode, view.name, connected, hasFeed, settingsOpen, signingOut]);
@@ -128,12 +139,12 @@ export default function Console({ userName, appliancePassword }: { userName: str
     const tick = () => {
       void driver.tick();
       setActive(driver.active);
-      setReady(driver.ready);
+      setCanAim(driver.canAim);
       setStopState(driver.stopState);
     };
     const timer = setInterval(tick, DRIVE_INTERVAL_MS);
-    const leave = () => stop();
-    const visibility = () => { if (document.hidden && !phoneCapture.current?.continuous) leave(); };
+    const leave = stopInDrive;
+    const visibility = () => { if (document.hidden) leave(); };
     window.addEventListener("blur", leave);
     window.addEventListener("pagehide", leave);
     document.addEventListener("visibilitychange", visibility);
@@ -144,7 +155,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
       document.removeEventListener("visibilitychange", visibility);
       leave();
     };
-  }, [driver, stop]);
+  }, [driver, stopInDrive]);
 
   const toggleAppliance = useCallback(
     async (pin: AppliancePin) => {
@@ -479,12 +490,12 @@ export default function Console({ userName, appliancePassword }: { userName: str
   const changeMode = useCallback((next: PatientMode) => {
     // Leaving the control surface cancels recording, speech, and drive holds.
     if (next !== "live") {
-      stop();
+      stopInDrive();
       if (!inCall) { abortWork(); stopSpeaking(); endConversation(); }
       if (view.name === "listening" || view.name === "thinking") setView({ name: "listen" });
     }
     setMode(next);
-  }, [stop, abortWork, endConversation, inCall, setView, view.name]);
+  }, [stopInDrive, abortWork, endConversation, inCall, setView, view.name]);
 
   const settingsButton = useDwell(() => {
     if (view.name === "listening" || view.name === "thinking") {
@@ -717,7 +728,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
           <IrisMark size={38} />
           <h1 className="truncate font-display text-2xl font-bold" title={userName}>{userName}</h1>
         </div>
-        <ScreenGazeControls mode={mode} setMode={changeMode} />
+        <ScreenGazeControls mode={mode} setMode={changeMode} settingsOpen={settingsOpen} onTrackingLost={stopInDrive} />
         <button type="button" ref={settingsButton.ref} {...settingsButton.props} aria-haspopup="dialog"
           className="patient-tool"><span className="dwell-fill" /><Settings2 aria-hidden className="relative size-5" /><span className="relative">Settings</span></button>
         <button type="button" ref={signOutButton.ref} {...signOutButton.props} disabled={signingOut}
@@ -731,9 +742,10 @@ export default function Console({ userName, appliancePassword }: { userName: str
             fallbackFrameUrl={connection.media.fallbackFrameUrl}
             mediaState={connection.media.state}
             drive={view.name === "drive" ? {
-              enabled: ready || active !== null,
+              enabled: canAim || active !== null,
+              allowPointerMotion: mode !== "mouse",
               stopState: connected && brokerState.status === "connected" ? stopState : "unavailable",
-              active, start, release, stop, frame, lostFeed,
+              active, start, release, center, frame, lostFeed,
             } : undefined}
             heard={heard}
             heardLabel={
@@ -758,6 +770,10 @@ export default function Console({ userName, appliancePassword }: { userName: str
           showHeading={view.name !== "home" && view.name !== "drive" && !inCommunication} />
       </section>
       <ControlSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)}
+        mouseGaze={mode === "mouse"} onToggleMouseGaze={() => {
+          changeMode(mode === "mouse" ? "manual" : "mouse");
+          setSettingsOpen(false);
+        }}
         micId={micId} onMicChange={setMicId} micListVersion={micListVersion} connection={connection} />
     </main>
   );

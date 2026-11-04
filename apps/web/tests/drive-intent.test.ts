@@ -13,12 +13,18 @@ function bench() {
   let now = 100;
   let available = true;
   const messages: DriveIntent[] = [];
-  const drive = new DrivePublisher((intent) => { messages.push(intent); }, () => available, () => now);
+  let onPublish: (() => void) | undefined;
+  const drive = new DrivePublisher((intent) => {
+    messages.push(intent);
+    onPublish?.();
+    onPublish = undefined;
+  }, () => available, () => now);
+  const nextPublished = () => new Promise<void>((resolve) => { onPublish = resolve; });
   function status(state: string, id = "s1", retained = false) {
     drive.mobileStatus(JSON.stringify({type: "mobile_status", device_id: "esp12e_carbot", control_session_id: id,
       state, esp_online: true, calibrated: true}), retained);
   }
-  return { drive, messages, status, advance(ms: number) { now += ms; }, disconnect() { available = false; } };
+  return { drive, messages, status, nextPublished, advance(ms: number) { now += ms; }, disconnect() { available = false; } };
 }
 
 describe("phone-mediated drive", () => {
@@ -166,4 +172,93 @@ describe("phone-mediated drive", () => {
     await Promise.all([b.drive.start("forward"), b.drive.stop()]);
     expect(b.messages.map(i => i.action)).toEqual(["stop"]);
   });
+});
+
+function phone(b: ReturnType<typeof bench>, state: string, lastId?: string) {
+  b.drive.mobileStatus(JSON.stringify({ type: "mobile_status", device_id: "esp12e_carbot", control_session_id: "s1",
+    state, esp_online: true, calibrated: true, supports_neutral: true, last_command_id: lastId }), false);
+}
+
+test("a capable phone receives a signed zero-speed neutral, and only its ready acknowledgement permits fresh movement", async () => {
+  const b = bench();
+  b.drive.grant(grant()); phone(b, "ready");
+  await b.drive.start("forward"); phone(b, "driving");
+  await b.drive.release("forward");
+  expect(b.messages.map(i => i.action)).toEqual(["forward", "neutral"]);
+  const neutral = b.messages[1]!;
+  expect(neutral.speed).toBe(0);
+  expect(neutral.ttl_ms).toBe(300);
+  expect(neutral.command_id).not.toBe(b.messages[0]!.command_id);
+  const canonical = ["esp12e_carbot", "s1", neutral.command_id, 2, "neutral", 0, neutral.sent_at, 300].join("\n");
+  expect(neutral.signature).toBe(createHmac("sha256", Buffer.from(key, "hex")).update(canonical).digest("hex"));
+  expect(b.drive.canAim).toBe(true);
+  phone(b, "ready", "an-older-command"); await b.drive.start("left");
+  expect(b.messages).toHaveLength(2);
+  phone(b, "ready", neutral.command_id); await b.drive.tick();
+  expect(b.messages).toHaveLength(2);
+  expect(b.drive.stopState).toBe("available");
+  await b.drive.start("left"); await b.drive.center();
+  expect(b.messages.map(i => i.action)).toEqual(["forward","neutral","left","neutral"]);
+  phone(b, "ready", b.messages.at(-1)!.command_id); await b.drive.center();
+  expect(b.messages.at(-1)!.action).toBe("neutral");
+});
+
+test("exiting neutral or idle Drive hard-stops once, ignores stale ready reports and requires explicit phone re-enable", async () => {
+  for (const transition of ["idle","pending","acknowledged"]) {
+    const b = bench();
+    b.drive.grant(grant()); phone(b,"ready");
+    if (transition !== "idle") {
+      await b.drive.center();
+      if (transition === "acknowledged") phone(b,"ready",b.messages.at(-1)!.command_id);
+    }
+    await b.drive.stop(); await b.drive.stop(); await b.drive.tick();
+    expect(b.messages.filter(i=>i.action==="stop")).toHaveLength(1);
+    const hard = b.messages.at(-1)!;
+    phone(b,"disarmed",hard.command_id); phone(b,"ready","old-id"); await b.drive.start("right");
+    expect(b.messages.at(-1)).toBe(hard);
+    phone(b,"ready",hard.command_id); await b.drive.start("right");
+    expect(b.messages.at(-1)?.action).toBe("right");
+  }
+});
+
+test("an expired neutral acknowledgement or a stale feed while idle hard-stops instead of resuming", async () => {
+  const b = bench(); b.drive.grant(grant()); phone(b,"ready"); await b.drive.center();
+  const neutral = b.messages[0]!;
+  b.advance(1200);
+  const hardStop = b.nextPublished();
+  phone(b, "ready", neutral.command_id);
+  await hardStop;
+  expect(b.messages.map(i=>i.action)).toEqual(["neutral","stop"]);
+  expect(b.drive.canAim).toBe(false);
+  const idle = bench(); idle.drive.grant(grant()); phone(idle,"ready"); await idle.drive.tick();
+  idle.disconnect(); await idle.drive.tick(); await idle.drive.tick();
+  expect(idle.messages.map(i=>i.action)).toEqual(["stop"]);
+});
+
+test("an expired movement or a just-reported phone fault cannot turn into a neutral handoff", async () => {
+  const moving = bench();
+  moving.drive.grant(grant()); phone(moving, "ready"); await moving.drive.start("right");
+  moving.advance(301); await moving.drive.release("right");
+  expect(moving.messages.map(i => i.action)).toEqual(["right", "stop"]);
+
+  const idle = bench();
+  idle.drive.grant(grant());
+  phone(idle, "ready");
+  const hardStop = idle.nextPublished();
+  phone(idle, "fault"); phone(idle, "fault");
+  await hardStop;
+  expect(idle.messages.map(i => i.action)).toEqual(["stop"]);
+  phone(idle, "ready"); await idle.drive.start("right");
+  expect(idle.messages.map(i => i.action)).toEqual(["stop"]);
+});
+
+test("a pending signature is cancelled on a hard stop and legacy center keeps its disarming behavior", async () => {
+  const crossing = bench();
+  crossing.drive.grant(grant()); phone(crossing, "ready"); await crossing.drive.start("forward");
+  await Promise.all([crossing.drive.release("forward"), crossing.drive.stop()]);
+  expect(crossing.messages.map(i => i.action)).toEqual(["forward", "stop"]);
+  const old = bench();
+  old.drive.grant(grant()); old.status("ready"); await old.drive.center();
+  expect(old.messages.map(i => i.action)).toEqual(["stop"]);
+  old.status("ready"); expect(old.drive.ready).toBe(false);
 });

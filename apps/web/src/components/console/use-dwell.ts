@@ -12,11 +12,11 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
   const [dwelling, setDwelling] = useState(false);
   useEffect(() => {
     const el = ref.current;
-    if (!el || disabled) return;
+    if (!el) return;
     const enter = () => setDwelling(true);
     const leave = () => { el.style.removeProperty("--gaze-progress"); setDwelling(false); };
     const progress = (event: Event) => el.style.setProperty("--gaze-progress", String((event as CustomEvent<{progress: number}>).detail.progress));
-    const select = () => { leave(); onSelect(); };
+    const select = () => { leave(); if (!disabled) onSelect(); };
     el.addEventListener("gaze:enter", enter);
     el.addEventListener("gaze:leave", leave);
     el.addEventListener("gaze:progress", progress);
@@ -31,7 +31,7 @@ export function useDwell<T extends HTMLElement = HTMLButtonElement>(
   return { ref, dwelling, props: {
     "data-gaze-target": "",
     "data-gaze-dwell": ms,
-    "data-dwelling": !disabled && dwelling,
+    "data-dwelling": dwelling,
     "aria-disabled": disabled || undefined,
     onClick: disabled ? undefined : onSelect,
   } };

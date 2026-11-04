@@ -11,11 +11,12 @@ import type { RobotStream } from "@/lib/rtc";
 
 export type DriveControls = {
   enabled: boolean;
+  allowPointerMotion: boolean;
   stopState: StopState;
   active: Direction | null;
   start: (action: Direction, source: DriveSource) => void;
   release: (action: DriveAction, source?: DriveSource) => void;
-  stop: (explicit?: boolean) => void;
+  center: () => void;
   frame: () => void;
   lostFeed: () => void;
 };
@@ -74,7 +75,13 @@ export function RobotFeed({
 
   const frame = drive?.frame;
   const lostFeed = drive?.lostFeed;
-  useEffect(() => () => { lostFeed?.(); }, [stream, mediaState, lostFeed]);
+  const previousFeed = useRef({ stream, mediaState });
+  useEffect(() => {
+    const previous = previousFeed.current;
+    previousFeed.current = { stream, mediaState };
+    if ((previous.stream || previous.mediaState === "fallback") &&
+        (stream !== previous.stream || mediaState !== previous.mediaState)) lostFeed?.();
+  }, [stream, mediaState, lostFeed]);
   useEffect(() => {
     const video = videoRef.current;
     if (!stream || !video || !frame || mediaState !== "live") return;
@@ -108,9 +115,9 @@ export function RobotFeed({
           autoPlay
           playsInline
           muted={muted}
-          onEnded={() => lostFeed?.()}
-          onError={() => lostFeed?.()}
-          onPause={() => lostFeed?.()}
+          onEnded={stream ? lostFeed : undefined}
+          onError={stream ? lostFeed : undefined}
+          onPause={stream ? lostFeed : undefined}
           aria-label="Live robot camera"
           className={stream && !fallbackFrameUrl ? "size-full object-cover" : "hidden"}
           style={mirrored ? { transform: "scaleX(-1)" } : undefined}
@@ -157,6 +164,7 @@ export function RobotFeed({
       {drive && (hasFeed || stopOnly || drive.stopState === "disarmed") && (
         <p role="status" className="shrink-0 border-t border-white/15 px-4 py-2 text-sm font-semibold">
           {drive.stopState === "pending" ? "Stop requested. Waiting for the phone. Select the center to retry."
+            : drive.stopState === "neutral-pending" ? "Stopping the wheels. Waiting for the phone to confirm."
             : drive.stopState === "disarmed" ? "Phone reports driving is disarmed. Enable driving on the phone to move again."
             : !hasFeed ? "Video unavailable. Only Stop is available."
             : drive.active ? "Release the direction or look away to stop."
@@ -206,7 +214,7 @@ function GuideLines() {
   );
 }
 
-const REGIONS: { action: DriveAction; label: string; style: React.CSSProperties }[] = [
+const REGIONS: { action: Direction | "stop"; label: string; style: React.CSSProperties }[] = [
   { action: "left", label: "Turn left", style: { left: 0, top: 0, width: "25%", height: "100%" } },
   { action: "right", label: "Turn right", style: { left: "75%", top: 0, width: "25%", height: "100%" } },
   { action: "forward", label: "Forward", style: { left: "25%", top: 0, width: "50%", height: "30%" } },
@@ -223,7 +231,7 @@ function DriveRegions({ drive, stopOnly }: { drive: DriveControls; stopOnly: boo
 function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] & { drive: DriveControls }) {
   const ref = useRef<HTMLButtonElement>(null);
   const [looking, setLooking] = useState(false);
-  const { start, release, stop, enabled } = drive;
+  const { start, release, center, enabled } = drive;
   const isStop = action === "stop";
 
   useEffect(() => {
@@ -231,7 +239,7 @@ function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] &
     if (!el) return;
     const enter = () => setLooking(true);
     const select = () => {
-      if (isStop) { stop(true); return; }
+      if (isStop) { center(); return; }
       start(action, "gaze");
     };
     const leave = () => {
@@ -245,16 +253,16 @@ function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] &
       el.removeEventListener("gaze:enter", enter);
       el.removeEventListener("gaze:select", select);
       el.removeEventListener("gaze:leave", leave);
-      release(action);
     };
-  }, [action, isStop, start, release, stop]);
+  }, [action, isStop, start, release, center]);
 
   return <button ref={ref} type="button" data-gaze-target="" data-gaze-dwell={GAZE_DWELL_MS}
     disabled={isStop ? drive.stopState === "unavailable" || drive.stopState === "disarmed" : !enabled}
+    data-gaze-unavailable={isStop && drive.stopState === "disarmed" ? "The phone reports driving is disarmed" : "Check the live video and enable driving on the phone"}
     aria-label={isStop ? "Stop driving" : `Hold to drive: ${label}`}
-    onClick={isStop ? () => stop(true) : undefined}
+    onClick={isStop ? center : undefined}
     onPointerDown={e => {
-      if (isStop || !e.isPrimary || e.button !== 0) return;
+      if (isStop || !drive.allowPointerMotion || !e.isPrimary || e.button !== 0) return;
       start(action, "pointer");
     }}
     onPointerMove={e => {

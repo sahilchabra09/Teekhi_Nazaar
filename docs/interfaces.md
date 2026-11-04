@@ -95,7 +95,7 @@ export interface Gaze {
 export const gaze: Gaze;
 ```
 
-Targets marked `data-gaze-target` receive `gaze:enter`, `gaze:progress` (fraction from 0 to 1), `gaze:select`, and `gaze:leave`. The default selection takes 1,200 ms of fresh gaze samples on the same target. Moving away or losing tracking cancels an incomplete selection. One fixation can select only once. Dashboard preview routes gaze only to local navigation marked `data-gaze-preview`. An incoming invitation requires a fresh entry if it appeared under the resting gaze. For validated driving, accepting a direction starts the separate 100 ms intention timer. Leaving the direction stops the hold immediately.
+Targets marked `data-gaze-target` receive `gaze:enter`, `gaze:progress` (fraction from 0 to 1), `gaze:select`, and `gaze:leave`. The default selection takes 1,200 ms of fresh gaze samples on the same target. Moving away or losing tracking cancels an incomplete selection. One fixation can select only once. Dashboard preview routes gaze only to local navigation marked `data-gaze-preview`. An incoming invitation requires a fresh entry if it appeared under the resting gaze. For validated driving, accepting a direction starts the separate 100 ms intention timer. Leaving the direction stops the hold immediately. With a neutral-capable phone the next deliberate dwell can move again in the same enabled session. Exiting Drive hard-stops and disarms. **Settings → Use mouse gaze** uses the same dwell and signed movement path as validated eye input.
 
 ### Media module
 

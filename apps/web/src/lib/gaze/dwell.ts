@@ -16,6 +16,7 @@ export class ScreenDwell {
   private previousY = NaN;
   private blockedArea: DOMRect | null = null;
   private accepted = false;
+  private selectable = true;
 
   leave() {
     this.current?.dispatchEvent(new Event("gaze:leave"));
@@ -23,13 +24,18 @@ export class ScreenDwell {
     this.accepted = false;
   }
 
-  update(element: HTMLElement | null, x: number, y: number, frame: number) {
+  update(element: HTMLElement | null, x: number, y: number, frame: number, selectable = true) {
     if (frame - this.lastFrame > 350 || frame < this.lastFrame) this.leave();
     this.lastFrame = frame;
     const previousX = this.previousX, previousY = this.previousY;
     this.previousX = x;
     this.previousY = y;
     if (this.blockedArea && !contains(this.blockedArea, x, y)) this.blockedArea = null;
+    if (element && element === this.current && this.selectable !== selectable) {
+      // A gate changing under a resting eye must not start motion or switch an appliance.
+      this.blockedArea = element.getBoundingClientRect();
+      this.leave();
+    }
     if (element !== this.current) {
       this.leave();
       if (!element || this.blockedArea) return 0;
@@ -41,6 +47,7 @@ export class ScreenDwell {
           return 0;
         }
       }
+      this.selectable = selectable;
       this.current = element;
       this.since = frame;
       element.dispatchEvent(new Event("gaze:enter"));
@@ -52,7 +59,7 @@ export class ScreenDwell {
     if (progress < 1) return progress;
     this.accepted = true;
     this.blockedArea = element.getBoundingClientRect();
-    element.dispatchEvent(new Event("gaze:select"));
+    if (selectable) element.dispatchEvent(new Event("gaze:select"));
     return 1;
   }
 }
