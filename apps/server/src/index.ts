@@ -10,6 +10,7 @@ import { talkRoutes } from "./talk/routes";
 
 /** Phone pairing, media relay (/ws), auth and /api/mobile/* (docs/mobile.md). */
 const gateway = createRobotGateway({
+  speech: ENV.DEEPGRAM_API_KEY ? { apiKey: ENV.DEEPGRAM_API_KEY, sttModel: ENV.DEEPGRAM_STT_MODEL, ttsModel: ENV.DEEPGRAM_TTS_MODEL } : undefined,
   origin: ENV.CORS_ORIGIN,
   robotOwnerId: ENV.IRIS_ROBOT_OWNER_ID,
   authBaseUrl: ENV.BETTER_AUTH_URL,

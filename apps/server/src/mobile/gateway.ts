@@ -5,12 +5,15 @@ import type { Server, ServerWebSocket } from "bun";
 import { Pairing, type Identity, type SessionResolver } from "./pairing";
 import { MobileOAuth, appCallback } from "./oauth";
 
+import { DeepgramLive, deepgramSpeak, type DeepgramConfig } from "../talk/deepgram";
+
 type Role = "web" | "phone";
-interface PeerData { role: Role; identity: Identity; driveCapable?: boolean; driveBinding?: string; check?: ReturnType<typeof setInterval>; checking?: boolean; window: number; messages: number }
+interface PeerData { speech?: boolean; live?: DeepgramLive; paused?: boolean; busy?: boolean; generation?: number; requestId?: string; role: Role; identity: Identity; driveCapable?: boolean; driveBinding?: string; check?: ReturnType<typeof setInterval>; checking?: boolean; window: number; messages: number }
 type Peer = ServerWebSocket<PeerData>;
 type Message = Record<string, unknown> & { type: string };
 
 export function createRobotGateway(options: {
+  speech?: DeepgramConfig;
   resolve: SessionResolver;
   origin: string;
   authHandler: (request: Request) => Promise<Response>;
@@ -23,6 +26,8 @@ export function createRobotGateway(options: {
   const pairing = new Pairing(options.resolve);
   const oauth = new MobileOAuth(pairing);
   const authBase = new URL(options.authBaseUrl).origin;
+  const speechPeers = new Map<string, Peer>();
+  const ttsBusy = new Set<string>();
   const rooms = new Map<string, Map<Role, Peer>>();
   const deviceId = "esp12e_carbot";
   let lease: { control_session_id: string; signing_key: string; expires_at_ms: number } | undefined;
@@ -112,6 +117,22 @@ export function createRobotGateway(options: {
     }
     return c.json({ ok: true });
   });
+  app.post("/api/mobile/tts", async (c) => {
+    const identity = await pairing.phone(c.req.raw.headers);
+    if (!identity) return c.json({ error: "Unauthorized" }, 401);
+    if (!options.speech) return c.json({ error: "Deepgram is not configured" }, 503);
+    const body = await c.req.json().catch(() => null);
+    if (typeof body?.text !== "string" || !body.text.trim() || body.text.length > 1000) return c.json({ error: "Invalid speech text" }, 400);
+    const id = identity.account.user.id;
+    if (ttsBusy.has(id)) return c.json({ error: "Voice synthesis busy" }, 429);
+    ttsBusy.add(id);
+    try {
+      const audio = await deepgramSpeak(options.speech, body.text.trim(), c.req.raw.signal);
+      if (!await pairing.valid(identity)) return c.json({ error: "Session expired" }, 401);
+      return new Response(audio, { headers: { "Content-Type": "audio/wav", "Cache-Control": "no-store" } });
+    } catch { return c.json({ error: "Deepgram voice synthesis failed" }, 502); }
+    finally { ttsBusy.delete(id); }
+  });
   app.get("/api/mobile/session", async (c) => {
     const identity = await pairing.phone(c.req.raw.headers);
     if (!identity) return c.json({ error: "Unauthorized" }, 401);
@@ -188,6 +209,47 @@ export function createRobotGateway(options: {
   const send = (peer: Peer | undefined, message: Message) => {
     return !!peer && peer.readyState === 1 && peer.getBufferedAmount() < 2_000_000 && peer.send(JSON.stringify(message)) !== 0;
   };
+  const speechState = (peer: Peer, state: string) => {
+    const message = { type: "speech_state", state, request_id: peer.data.requestId ?? "", ts: Date.now() };
+    send(peer, message); send(rooms.get(peer.data.identity.account.user.id)?.get("web"), message);
+  };
+  const resetSpeech = (peer: Peer) => { peer.data.generation = (peer.data.generation ?? 0) + 1; peer.data.live?.close(); peer.data.live = undefined; };
+  const startSpeech = (peer: Peer) => {
+    if (!options.speech || peer.data.live || peer.data.busy || peer.data.paused) return;
+    peer.data.requestId ||= `u_${crypto.randomUUID()}`;
+    const generation = peer.data.generation ?? 0;
+    peer.data.live = new DeepgramLive(options.speech, {
+      activity: () => { if (generation === (peer.data.generation ?? 0)) speechState(peer, "listening"); },
+      error: (message) => {
+        peer.data.live = undefined; peer.data.paused = true;
+        speechState(peer, "failed");
+        send(peer, { type: "error", code: "DEEPGRAM_FAILED", message, ts: Date.now() });
+      },
+      final: async (text, confidence) => {
+        peer.data.live = undefined;
+        if (generation !== (peer.data.generation ?? 0) || peer.data.paused) return;
+        const id = peer.data.identity.account.user.id;
+        if (!text || confidence < .55) { speechState(peer, "no_speech"); peer.data.requestId = ""; return; }
+        if (speechBusy.has(id) || !options.talkHandler) { speechState(peer, "failed"); return; }
+        peer.data.busy = true; speechBusy.add(id); speechState(peer, "processing");
+        try {
+          if (!await pairing.valid(peer.data.identity)) { peer.close(1008, "Session expired"); return; }
+          const headers = new Headers(peer.data.identity.headers); headers.set("Content-Type", "application/json");
+          const response = await options.talkHandler(new Request(new URL("/api/talk/transcript", authBase).toString(), {
+            method: "POST", headers, body: JSON.stringify({ text, confidence, conversationId: phoneConversations.get(id) }),
+            signal: AbortSignal.timeout(90000),
+          }));
+          const result = await response.json() as Record<string, unknown>;
+          if (generation !== (peer.data.generation ?? 0) || peer.readyState !== 1 || !await pairing.valid(peer.data.identity)) return;
+          if (response.ok && typeof result.conversationId === "string") phoneConversations.set(id, result.conversationId);
+          if (result.models && typeof result.models === "object") result.models = { ...result.models, stt: options.speech!.sttModel };
+          send(rooms.get(id)?.get("web"), { type: "talk_result", request_id: peer.data.requestId ?? "", result, ok: response.ok, ts: Date.now() });
+          speechState(peer, response.ok ? "ready" : "failed");
+        } catch { if (generation === (peer.data.generation ?? 0)) speechState(peer, "failed"); }
+        finally { peer.data.busy = false; speechBusy.delete(id); peer.data.requestId = ""; }
+      },
+    });
+  };
   const revokeDrive = (room: Map<Role, Peer>) => {
     const phone = room.get("phone");
     if (!phone || phone.data.identity.account.user.id !== options.robotOwnerId) return;
@@ -222,6 +284,15 @@ export function createRobotGateway(options: {
     maxRequestBodySize: 512_000,
     async fetch(request: Request, server: Server<PeerData>) {
       const url = new URL(request.url);
+      if (url.pathname === "/api/mobile/speech") {
+        const origin = request.headers.get("origin");
+        if (origin && origin !== options.origin) return new Response("Untrusted origin", { status: 403 });
+        const identity = await pairing.phone(request.headers);
+        if (!identity) return new Response("Unauthorized", { status: 401 });
+        if (!options.speech) return new Response("Deepgram is not configured", { status: 503 });
+        if (server.upgrade(request, { data: { role: "phone", identity, speech: true, window: Date.now(), messages: 0 } })) return;
+        return new Response("WebSocket required", { status: 426 });
+      }
       if (url.pathname !== "/ws") return app.fetch(request, { server });
       const role = url.searchParams.get("role");
       if (role !== "web" && role !== "phone") return new Response("Invalid role", { status: 400 });
@@ -236,6 +307,12 @@ export function createRobotGateway(options: {
       maxPayloadLength: 1_000_000,
       idleTimeout: 60,
       open(peer: Peer) {
+        if (peer.data.speech) {
+          const id = peer.data.identity.account.user.id;
+          speechPeers.get(id)?.close(4001, "Speech connection replaced"); speechPeers.set(id, peer);
+          peer.data.check = setInterval(() => void validate(peer), options.validationIntervalMs ?? 15000);
+          send(peer, { type: "speech_state", state: "ready", request_id: "", ts: Date.now() }); return;
+        }
         const id = peer.data.identity.account.user.id;
         const room = rooms.get(id) ?? new Map<Role, Peer>();
         rooms.set(id, room);
@@ -249,6 +326,12 @@ export function createRobotGateway(options: {
       },
       close(peer: Peer) {
         clearInterval(peer.data.check);
+        if (peer.data.speech) {
+          resetSpeech(peer);
+          const id = peer.data.identity.account.user.id;
+          if (speechPeers.get(id) === peer) speechPeers.delete(id);
+          return;
+        }
         const room = roomFor(peer);
         if (room?.get(peer.data.role) !== peer) return;
         revokeDrive(room);
@@ -256,6 +339,25 @@ export function createRobotGateway(options: {
         if (!room.size) rooms.delete(peer.data.identity.account.user.id);
       },
       message(peer: Peer, raw: string | Buffer) {
+        if (peer.data.speech) {
+          if (peer.data.identity.expires <= Date.now()) { peer.close(1008, "Session expired"); return; }
+          if (Date.now() - peer.data.window >= 1000) { peer.data.window = Date.now(); peer.data.messages = 0; }
+          if (++peer.data.messages > 100) { peer.close(1008, "Audio rate exceeded"); return; }
+          if (typeof raw !== "string") {
+            if (raw.length > 8192 || raw.length % 2) { peer.close(1008, "Invalid PCM frame"); return; }
+            if (!peer.data.paused && !peer.data.busy) { startSpeech(peer); peer.data.live?.audio(raw); }
+          } else try {
+            const command = JSON.parse(raw);
+            if (command.action === "pause" || command.action === "cancel") { resetSpeech(peer); peer.data.paused = command.action === "pause"; }
+            if (command.action === "resume") { peer.data.paused = false; speechState(peer, "ready"); }
+            if (command.action === "start") {
+              resetSpeech(peer); peer.data.paused = false;
+              peer.data.requestId = String(command.request_id ?? "").slice(0, 128);
+            }
+            if (command.action === "stop") { if (peer.data.live) peer.data.live.finalize(); else speechState(peer, "no_speech"); }
+          } catch { peer.close(1008, "Invalid speech command"); }
+          return;
+        }
         const room = roomFor(peer);
         if (room?.get(peer.data.role) !== peer) return;
         if (peer.data.identity.expires <= Date.now()) { peer.close(1008, "Session expired"); return; }

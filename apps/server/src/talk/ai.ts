@@ -6,6 +6,8 @@ import { ENV } from "../env.server";
 import type { Turn } from "./conversations";
 import { openRouterTranscription } from "./openrouter-transcription";
 
+import { deepgramTranscribe } from "./deepgram";
+
 const APP_NAME = "IRIS";
 
 export class TalkError extends Error {
@@ -25,7 +27,7 @@ function apiKey() {
 }
 
 export const models = {
-  stt: [ENV.OPENROUTER_STT_MODEL, ENV.OPENROUTER_STT_FALLBACK_MODEL].filter(Boolean),
+  stt: ENV.DEEPGRAM_API_KEY ? [ENV.DEEPGRAM_STT_MODEL] : [ENV.OPENROUTER_STT_MODEL, ENV.OPENROUTER_STT_FALLBACK_MODEL].filter(Boolean),
   reply: ENV.OPENROUTER_REPLY_MODEL,
   replyFallback: ENV.OPENROUTER_REPLY_FALLBACK_MODEL,
 };
@@ -36,6 +38,10 @@ export const models = {
 const LOW_CONFIDENCE = 0.55;
 
 export async function speechToText(audio: Uint8Array, signal?: AbortSignal) {
+  if (ENV.DEEPGRAM_API_KEY) {
+    try { return await deepgramTranscribe({ apiKey: ENV.DEEPGRAM_API_KEY, sttModel: ENV.DEEPGRAM_STT_MODEL, ttsModel: ENV.DEEPGRAM_TTS_MODEL }, audio, signal); }
+    catch { throw new TalkError(502, "STT_FAILED", "Deepgram transcription failed. Check the server key and connection."); }
+  }
   const key = apiKey();
   let lastError: unknown;
 
