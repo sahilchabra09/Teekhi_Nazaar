@@ -189,10 +189,10 @@ private class RobotSession(
         }, ::message, settings.accountToken, unauthorized)
         listener = Listener(context, address, scope, hub::send, { label, active ->
             change { if (it.speaking || it.androidStt) it else it.copy(listening = label, activeSpeech = active) }
-        }, ::error, settings.accountToken)
+        }, ::error, settings.accountToken, unauthorized)
         recognizer = AndroidRecognizer(context, hub::send, { label, active ->
             change { if (it.speaking) it else it.copy(listening = label, activeSpeech = active) }
-        }, ::error)
+        }, ::error, listener::transcript)
         rtc = RtcClient(context, listener, hub::send, { value -> change { it.copy(video = value) } },
             { track -> change { it.copy(remoteTrack = track, frontendVideoLive = false, eglContext = if (track != null) rtc.egl.eglBaseContext else null) } },
             { live -> change { it.copy(frontendVideoLive = live) } }, ::error)
@@ -233,6 +233,9 @@ private class RobotSession(
                 rtc.requestOffer()
             }
             is Speak -> speaker.speak(msg)
+            is Listen -> if (!speaking && sttReady) {
+                if (androidStt) recognizer.capture(msg.action, msg.request_id) else listener.capture(msg.action, msg.request_id)
+            } else hub.send(SpeechState("failed", msg.request_id))
             is RtcAnswer, is RtcIce -> rtc.accept(msg)
             is Stop -> mqtt?.stop("Hub requested stop")
             is SessionRevoked -> if (msg.device_id == controller.deviceId) endDrivePair()

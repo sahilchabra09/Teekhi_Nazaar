@@ -43,11 +43,12 @@ class PcmResampler {
 }
 
 /** Receives exactly 512 mono samples per frame (32 ms). No Android or networking dependencies. */
-class UtteranceSegmenter(private val activity: (Boolean) -> Unit, private val clip: (ByteArray) -> Unit) {
+class UtteranceSegmenter(private val activity: (Boolean) -> Unit, private val clip: (ByteArray) -> Unit, var automatic: Boolean = true, private val empty: () -> Unit = {}, private val minimumSpeechMs: Int = 0) {
     private val preRoll = ArrayDeque<ByteArray>()
     private var recording: ByteArrayOutputStream? = null
     private var speechMs = 0
     private var silenceMs = 0
+    private var voicedMs = 0
     var manual = false; private set
     var active = false; private set
 
@@ -57,11 +58,12 @@ class UtteranceSegmenter(private val activity: (Boolean) -> Unit, private val cl
             preRoll.addLast(pcm.copyOf())
             while (preRoll.size > 16) preRoll.removeFirst()
             speechMs = if (speech) speechMs + 32 else 0
-            if (speechMs >= 256) begin()
+            if (automatic && speechMs >= 256) begin()
         } else {
             recording!!.write(pcm)
+            if (speech) voicedMs += 32
             silenceMs = if (speech || manual) 0 else silenceMs + 32
-            if (silenceMs >= 704 || recording!!.size() >= 16000 * 2 * 15) finish()
+            if (silenceMs >= 1600 || recording!!.size() >= 16000 * 2 * 15) finish()
         }
     }
     fun toggleManual() {
@@ -71,17 +73,22 @@ class UtteranceSegmenter(private val activity: (Boolean) -> Unit, private val cl
             manual = true; begin()
         }
     }
+    fun stop() { finish() }
     private fun begin() {
         recording = ByteArrayOutputStream().also { out -> preRoll.forEach { out.write(it) } }
+        voicedMs = speechMs
         preRoll.clear(); silenceMs = 0; active = true; activity(true)
     }
     private fun finish() {
         val bytes = recording?.toByteArray()
+        val contentMs = ((bytes?.size ?: 0) / 32 - silenceMs).coerceAtLeast(1)
+        val enoughSpeech = voicedMs >= minimumSpeechMs && (minimumSpeechMs == 0 || voicedMs.toDouble() / contentMs >= 0.3)
         reset()
-        if (bytes != null && bytes.size >= 12800) clip(bytes.copyOf(minOf(bytes.size, 480000)))
+        if (enoughSpeech && bytes != null && bytes.size >= 12800) clip(bytes.copyOf(minOf(bytes.size, 480000)))
+        else empty()
     }
     fun reset() {
-        recording = null; preRoll.clear(); speechMs = 0; silenceMs = 0; manual = false
+        recording = null; preRoll.clear(); voicedMs = 0; speechMs = 0; silenceMs = 0; manual = false
         if (active) { active = false; activity(false) }
     }
 }

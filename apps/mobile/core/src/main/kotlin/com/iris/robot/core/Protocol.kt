@@ -26,6 +26,10 @@ data class TtsStatus(val speak_id: String, val state: String, val error: String?
 data class SpeechActivity(val active: Boolean, override val ts: Long = System.currentTimeMillis()) : Msg
 @Serializable @SerialName("transcript")
 data class Transcript(val utterance_id: String, val text: String, val confidence: Double? = null, override val ts: Long = System.currentTimeMillis()) : Msg
+@Serializable @SerialName("listen")
+data class Listen(val action: String, val request_id: String, override val ts: Long) : Msg
+@Serializable @SerialName("speech_state")
+data class SpeechState(val state: String, val request_id: String, override val ts: Long = System.currentTimeMillis()) : Msg
 @Serializable @SerialName("motion")
 data class MotionMessage(val alpha: Double, val beta: Double, val gamma: Double, val accel: Double, override val ts: Long = System.currentTimeMillis()) : Msg
 @Serializable @SerialName("bump")

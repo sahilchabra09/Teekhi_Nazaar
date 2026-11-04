@@ -5,6 +5,19 @@ import java.nio.ByteOrder
 import kotlin.test.*
 
 class AudioProtocolTest {
+    @Test fun `automatic speech gate rejects brief noise and accepts sustained speech without taps`() {
+        val clips = mutableListOf<ByteArray>()
+        val s = UtteranceSegmenter({}, clips::add, minimumSpeechMs = 480)
+        repeat(8) { s.frame(ByteArray(1024), true) }
+        repeat(50) { s.frame(ByteArray(1024), false) }
+        assertTrue(clips.isEmpty())
+        repeat(20) { s.frame(ByteArray(1024), true) }
+        repeat(50) { s.frame(ByteArray(1024), false) }
+        assertEquals(1, clips.size)
+        repeat(20) { s.frame(ByteArray(1024), true) }
+        repeat(50) { s.frame(ByteArray(1024), false) }
+        assertEquals(2, clips.size)
+    }
     @Test fun `wire format uses the contract discriminator and tolerates future fields`() {
         assertTrue(Protocol.encode(Hello(ts = 42)).contains("\"type\":\"hello\""))
         assertEquals(Speak("s1", "Hello", "phrase", ts = 42), Protocol.decode("""{"type":"speak","speak_id":"s1","text":"Hello","source":"phrase","ts":42,"future":true}"""))
@@ -45,9 +58,9 @@ class AudioProtocolTest {
         repeat(20) { s.frame(ByteArray(1024) { 1 }, false) }
         repeat(8) { s.frame(ByteArray(1024) { 2 }, true) }
         assertTrue(s.active)
-        repeat(22) { s.frame(ByteArray(1024), false) }
+        repeat(50) { s.frame(ByteArray(1024), false) }
         assertEquals(listOf(true, false), activity); assertEquals(1, clips.size)
-        assertEquals(38 * 1024, clips.single().size)
+        assertEquals(66 * 1024, clips.single().size)
         repeat(8) { s.frame(ByteArray(1024), true) }; s.reset()
         assertEquals(1, clips.size); assertFalse(s.active)
     }
@@ -57,5 +70,20 @@ class AudioProtocolTest {
         assertTrue(clips.isEmpty())
         s.toggleManual(); repeat(500) { s.frame(ByteArray(1024), false) }
         assertEquals(1, clips.size); assertEquals(480000, clips.single().size); assertFalse(s.active)
+    }
+    @Test fun `idle microphone does not upload speech before an explicit recording request`() {
+        val clips = mutableListOf<ByteArray>(); val s = UtteranceSegmenter({}, clips::add, automatic = false)
+        repeat(100) { s.frame(ByteArray(1024), true) }
+        assertFalse(s.active); assertTrue(clips.isEmpty())
+        s.toggleManual(); repeat(20) { s.frame(ByteArray(1024), true) }; s.stop()
+        assertEquals(1, clips.size)
+    }
+    @Test fun `automatic capture tolerates a short mid sentence pause`() {
+        val clips = mutableListOf<ByteArray>(); val s = UtteranceSegmenter({}, clips::add)
+        repeat(10) { s.frame(ByteArray(1024), true) }
+        repeat(38) { s.frame(ByteArray(1024), false) }
+        assertTrue(s.active); assertTrue(clips.isEmpty())
+        repeat(10) { s.frame(ByteArray(1024), true) }; repeat(50) { s.frame(ByteArray(1024), false) }
+        assertEquals(1, clips.size)
     }
 }
