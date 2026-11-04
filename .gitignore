@@ -85,3 +85,6 @@ __pycache__/
 
 # local test accounts (contain passwords)
 packages/db/seed/*.json
+
+# Generated from the locked browser vision runtime
+apps/web/public/vision-runtime/

@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3001",
-    "build": "next build",
+    "dev": "bun run prepare:vision && next dev --webpack --port 3001",
+    "build": "bun run prepare:vision && next build --webpack",
     "check-types": "tsc --noEmit",
     "test": "bun test tests",
     "start": "next start",
-    "env:generate": "varlock codegen"
+    "env:generate": "varlock codegen",
+    "prepare:vision": "bun scripts/prepare-vision.ts"
   },
   "dependencies": {
     "@Teekhi_Nazaar/ui": "workspace:*",
@@ -28,7 +29,9 @@
     "remark-gfm": "4.0.1",
     "sonner": "catalog:",
     "varlock": "catalog:",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@mediapipe/tasks-vision": "1.2.0",
+    "@techstark/opencv-js": "5.0.0-release.1"
   },
   "devDependencies": {
     "@Teekhi_Nazaar/config": "workspace:*",

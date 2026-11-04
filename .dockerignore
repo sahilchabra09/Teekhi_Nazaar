@@ -31,3 +31,10 @@ docker-compose.yml
 local.db
 local.db-*
 .data
+
+# Local firmware tools, builds and board provisioning secrets
+**/.pio/
+.platformio/
+.venv/
+bot/include/bot_secrets.h
+apps/web/public/vision-runtime/
