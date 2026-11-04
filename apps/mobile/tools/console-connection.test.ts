@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createApplicationHub, hubWebSocketUrl } from "../../web/src/lib/hub/client";
 import type { HubState } from "../../web/src/lib/hub/client";
 import { conversationReducer, initialConversation } from "../../web/src/lib/robot/conversation";
-import type { ConversationState, ConsoleView } from "../../web/src/lib/robot/conversation";
+import type { ConversationState } from "../../web/src/lib/robot/conversation";
 import { startDevHub } from "./dev-hub";
 
 const suggestion = (id = "u1") => ({ type: "suggestions", utterance_id: id, heard: `Question ${id}`,
@@ -12,35 +12,25 @@ async function until(check: () => boolean) {
   while (!check()) { if (Date.now() > deadline) throw new Error("Timed out waiting for connection"); await Bun.sleep(5); }
 }
 
-test("console queues new replies during confirmation and waits for its own phone TTS result", () => {
-  let state = conversationReducer(initialConversation, { type: "event", message: suggestion() });
-  expect(state.view.name).toBe("suggestions");
-  const from = state.view;
-  state = conversationReducer(state, { type: "navigate", view: { name: "confirm", text: "Yes, please.", source: "suggestion", from } });
-  state = conversationReducer(state, { type: "event", message: suggestion("u2") });
-  expect(state.view.name).toBe("confirm"); expect(state.queued?.utteranceId).toBe("u2");
-  state = conversationReducer(state, { type: "navigate", view: { name: "speaking", text: "Yes, please.", speakId: "s1" } });
-  state = conversationReducer(state, { type: "event", message: { type: "tts_status", speak_id: "other", state: "finished" } });
-  expect(state.view.name).toBe("speaking");
-  state = conversationReducer(state, { type: "event", message: { type: "tts_status", speak_id: "s1", state: "started" } });
-  expect(state.view.name).toBe("speaking");
-  state = conversationReducer(state, { type: "event", message: { type: "tts_status", speak_id: "s1", state: "finished" } });
-  expect((state.view as Extract<ConsoleView, { name: "suggestions" }>).utteranceId).toBe("u2");
-  expect(state.heard).toBe("Question u2"); expect(state.queued).toBeNull();
+test("unsolicited and late speech events never replace the patient's chosen screen", () => {
+  for (const name of ["home", "drive", "listen", "appliances", "listening", "thinking"] as const) {
+    const state = { ...initialConversation, view: name === "listening" ? { name, speaking: false } : { name } } as ConversationState;
+    for (const message of [suggestion(), { type: "speech_activity", active: true }, { type: "transcript", text: "stale" }]) {
+      expect(conversationReducer(state, { type: "event", message })).toBe(state);
+    }
+  }
 });
 
-test("unconfirmed or malformed suggestions are ignored and low confidence is explicit", () => {
-  expect(conversationReducer(initialConversation, { type: "event", message: { ...suggestion(), requires_user_confirmation: false } })).toBe(initialConversation);
-  expect(conversationReducer(initialConversation, { type: "event", message: { ...suggestion(), suggestions: ["only one"] } })).toBe(initialConversation);
-  const state = conversationReducer(initialConversation, { type: "event", message: { ...suggestion(), low_confidence: true } });
-  expect(state.view.name).toBe("suggestions");
-  expect((state.view as Extract<ConsoleView, { name: "suggestions" }>).lowConfidence).toBe(true);
+test("a confirmed reply returns to the listening page without starting another capture", () => {
+  const state: ConversationState = { ...initialConversation, view: { name: "speaking", speakId: "s1", text: "Hello", after: "listen" } };
+  expect(conversationReducer(state, { type: "event", message: { type: "tts_status", speak_id: "old", state: "finished" } })).toBe(state);
+  expect(conversationReducer(state, { type: "event", message: { type: "tts_status", speak_id: "s1", state: "finished" } }).view.name).toBe("listen");
 });
 
 test("disconnect and matching TTS error never report successful completion", () => {
-  const speaking: ConversationState = { ...initialConversation, activeSpeech: true, view: { name: "speaking", text: "Hello", speakId: "s1" } };
+  const speaking: ConversationState = { ...initialConversation, view: { name: "speaking", text: "Hello", speakId: "s1" } };
   const lost = conversationReducer(speaking, { type: "disconnected" });
-  expect(lost.activeSpeech).toBe(false); expect(lost.error).toContain("before speech completion");
+  expect(lost.error).toContain("before speech completion");
   const failed = conversationReducer(speaking, { type: "event", message: { type: "tts_status", speak_id: "s1", state: "error", error: "Device voice missing" } });
   expect(failed.error).toBe("Device voice missing");
   expect(conversationReducer(speaking, { type: "timeout", speakId: "old" })).toBe(speaking);

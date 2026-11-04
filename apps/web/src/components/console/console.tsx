@@ -39,17 +39,13 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
   // Connected phone mic → shared Talk pipeline; selected laptop mic when no phone is connected.
   const [micId, setMicId] = useState("");
-  const [micLevel, setMicLevel] = useState(0);
   const [micListVersion, setMicListVersion] = useState(0);
   const recorder = useRef<UtteranceRecorder | null>(null);
   const request = useRef<AbortController | null>(null);
-  const phoneCapture = useRef<{ id: string; hub: NonNullable<typeof connection.hub>; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const ignoredCaptures = useRef(new Set<string>());
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const phoneCapture = useRef<{ id: string; approved: boolean; expires: number; hub: NonNullable<typeof connection.hub>; timer: ReturnType<typeof setTimeout> } | null>(null);
   /** Current conversation (= one AutoSage chat). Cleared when the patient leaves conversation mode. */
   const conversationId = useRef<string | null>(null);
-  /** After the phone confirms it spoke a talk reply, listen again for the answer. */
-  const resumeListening = useRef(false);
-
   const setView = useCallback((next: View) => dispatch({ type: "navigate", view: next }), []);
   const confirm = (text: string, from: View, source: ReplySource = "phrase") => setView({ name: "confirm", text, source, from });
   /** Set when the server started a new conversation (long silence / someone new greeting). */
@@ -154,11 +150,9 @@ export default function Console({ userName, appliancePassword }: { userName: str
   // ── events from the robot phone over the hub (docs/interfaces.md §3)
   useEffect(() => {
     if (!connection.hub) return;
-    const unsubscribes = ["speech_activity", "transcript", "suggestions", "tts_status"].map((type) =>
-      connection.hub!.on(type, (message) => dispatch({ type: "event", message })),
-    );
-    unsubscribes.push(connection.hub.on("error", (message) => toast.error(typeof message.message === "string" ? message.message : "The hub reported an error.")));
-    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+    const offTts = connection.hub.on("tts_status", message => dispatch({ type: "event", message }));
+    const offError = connection.hub.on("error", message => toast.error(typeof message.message === "string" ? message.message : "The hub reported an error."));
+    return () => { offTts(); offError(); };
   }, [connection.hub]);
   useEffect(() => {
     if (!connection.phone || connection.status !== "connected") dispatch({ type: "disconnected" });
@@ -177,66 +171,122 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
   // ───────────────────────────── Say something ─────────────────────────────
 
-  const abortWork = useCallback(() => {
+  const clearPhoneTurn = useCallback((notifyPhone: boolean) => {
     const capture = phoneCapture.current;
-    if (capture) {
-      phoneCapture.current = null; clearTimeout(capture.timer);
-      ignoredCaptures.current.add(capture.id);
-      if (ignoredCaptures.current.size > 100) ignoredCaptures.current.delete(ignoredCaptures.current.values().next().value!);
-      try { capture.hub.send({ type: "listen", action: "cancel", request_id: capture.id, ts: Date.now() }); } catch {}
+    if (!capture) return;
+    phoneCapture.current = null;
+    clearTimeout(capture.timer);
+    setPendingId(null);
+    if (notifyPhone) {
+      try { capture.hub.send({ type: "listen", action: "cancel", request_id: capture.id, ts: Date.now() }); } catch { /* Peer disconnected. */ }
     }
-    recorder.current?.cancel();
-    recorder.current = null;
-    request.current?.abort();
-    request.current = null;
-    setMicLevel(0);
   }, []);
 
+  const abortWork = useCallback(() => {
+    clearPhoneTurn(true);
+    request.current?.abort();
+    request.current = null;
+    recorder.current?.cancel();
+    recorder.current = null;
+  }, [clearPhoneTurn]);
+
   useEffect(() => {
-    if (!connection.hub) return;
-    const finishCapture = () => {
-      if (phoneCapture.current) clearTimeout(phoneCapture.current.timer);
-      phoneCapture.current = null;
-    };
-    const offResult = connection.hub.on("talk_result", (message) => {
-      if (typeof message.request_id !== "string" || ignoredCaptures.current.has(message.request_id)) return;
-      if (phoneCapture.current && phoneCapture.current.id !== message.request_id) return;
-      finishCapture();
-      const result = message.result as import("@/lib/talk/api").UtteranceResult;
-      // No words caught: the server doesn't open a conversation for that, so there may be no id.
+    const hub = connection.hub;
+    if (!hub) return;
+    const offListen = hub.on("listen", message => {
+      const id = message.request_id;
+      if (typeof id !== "string" || !id || id.length > 128) return;
+      if (message.action === "cancel" && phoneCapture.current?.id === id) {
+        const approved = phoneCapture.current.approved;
+        clearPhoneTurn(false);
+        if (approved) setView({ name: "listen" });
+        return;
+      }
+      if (message.action !== "request" || phoneCapture.current) return;
+      if (request.current) {
+        hub.send({ type: "listen", action: "cancel", request_id: id, ts: Date.now() });
+        return;
+      }
+      // Receiving a request can never navigate, open the mic, or interrupt Drive.
+      const expires = Math.min(Date.now() + 60_000, typeof message.expires_at_ms === "number" ? message.expires_at_ms : Infinity);
+      if (expires <= Date.now()) return;
+      const timer = setTimeout(() => { if (phoneCapture.current?.id === id) clearPhoneTurn(true); }, expires - Date.now());
+      phoneCapture.current = { id, hub, timer, expires, approved: false };
+      setPendingId(id);
+    });
+    const offResult = hub.on("talk_result", message => {
+      const capture = phoneCapture.current;
+      if (!capture?.approved || capture.hub !== hub || capture.id !== message.request_id) return;
+      clearPhoneTurn(false);
+      const result = message.result as import("@/lib/talk/api").UtteranceResult | null;
       if (message.ok && result?.status === "no_speech") { setView({ name: "no-speech" }); return; }
-      if (!message.ok || !result || typeof result.conversationId !== "string") {
-        const failure = message.result as { message?: string; error?: string };
-        toast.error(failure?.message ?? failure?.error ?? "Speech processing failed. Try again.");
-        setView({ name: "home" }); return;
+      if (!message.ok || result?.status !== "ok" || typeof result.conversationId !== "string" ||
+          typeof result.heard !== "string" || !Array.isArray(result.replies) || result.replies.length !== 3 ||
+          !result.replies.every(r => typeof r === "string" && r.trim() && r.length <= 4000)) {
+        toast.error("The phone could not complete this listening turn.");
+        setView({ name: "listen" }); return;
       }
       conversationId.current = result.conversationId;
-      if (result.status === "no_speech") { setView({ name: "no-speech" }); return; }
       announceSwitch(result.newConversation);
-      dispatch({ type: "event", message: { type: "suggestions", utterance_id: result.conversationId,
-        heard: result.heard, suggestions: result.replies, low_confidence: result.lowConfidence,
-        requires_user_confirmation: true, ts: Date.now() } });
+      setView({ name: "suggestions", utteranceId: result.conversationId, heard: result.heard, replies: result.replies, lowConfidence: result.lowConfidence });
     });
-    const offState = connection.hub.on("speech_state", (message) => {
-      if (typeof message.request_id !== "string" || ignoredCaptures.current.has(message.request_id)) return;
-      if (phoneCapture.current && phoneCapture.current.id !== message.request_id) return;
+    const offState = hub.on("speech_state", message => {
+      const capture = phoneCapture.current;
+      if (!capture?.approved || capture.hub !== hub || capture.id !== message.request_id) return;
       if (message.state === "processing") setView({ name: "thinking" });
+      else if (message.state === "listening") setView({ name: "listening", speaking: true });
       else if (message.state === "no_speech" || message.state === "failed") {
-        finishCapture(); setView({ name: "no-speech" });
-        if (message.state === "failed") toast.error("Phone speech processing failed. Check the phone and server.");
+        clearPhoneTurn(false); setView({ name: "no-speech" });
+        if (message.state === "failed") toast.error("Phone speech processing failed. Request another turn.");
       }
     });
-    return () => { offResult(); offState(); };
-  }, [announceSwitch, connection.hub, setView]);
+    return () => { offListen(); offResult(); offState(); };
+  }, [announceSwitch, connection.hub, clearPhoneTurn, setView]);
   useEffect(() => {
-    if (!connection.phone && phoneCapture.current) { abortWork(); setView({ name: "no-speech" }); }
-  }, [connection.phone, abortWork, setView]);
+    const capture = phoneCapture.current;
+    if (capture && (!connected || capture.hub !== connection.hub)) {
+      clearPhoneTurn(false);
+      if (capture.approved) setView({ name: "listen" });
+    }
+  }, [connected, connection.hub, clearPhoneTurn, setView]);
+
+  useEffect(() => {
+    const leave = () => {
+      if (!phoneCapture.current?.approved && !request.current) return;
+      abortWork();
+      setView({ name: "listen" });
+    };
+    const visibility = () => { if (document.hidden) leave(); };
+    window.addEventListener("pagehide", leave);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [abortWork, setView]);
+
+  const approveListening = () => {
+    const capture = phoneCapture.current;
+    if (view.name !== "listen" || !connected || document.hidden || mode === "setup" || settingsOpen || !capture ||
+        capture.hub !== connection.hub || capture.approved || capture.id !== pendingId || Date.now() >= capture.expires) return;
+    clearTimeout(capture.timer);
+    capture.approved = true;
+    setPendingId(null);
+    capture.timer = setTimeout(() => {
+      if (phoneCapture.current !== capture) return;
+      clearPhoneTurn(true);
+      setView({ name: "listen" });
+    }, 100_000);
+    try {
+      capture.hub.send({ type: "listen", action: "start", request_id: capture.id, conversationId: conversationId.current, ts: Date.now() });
+      setView({ name: "listening", speaking: false });
+    } catch { clearPhoneTurn(false); toast.error("The phone disconnected before approval reached it."); }
+  };
 
   /** Leaving conversation mode ends the conversation; the next "Say something" opens a new chat. */
   const endConversation = useCallback(() => {
     const id = conversationId.current;
     conversationId.current = null;
-    resumeListening.current = false;
     setNewSpeaker(null);
     if (id) void talkApi.endConversation(id).catch(() => {});
   }, []);
@@ -247,7 +297,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
       if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
         toast.error("Microphone access is blocked. Allow it in the browser’s address bar.");
       } else if (error instanceof DOMException && (error.name === "NotFoundError" || error.name === "OverconstrainedError")) {
-        toast.error("That microphone isn’t available. Pick another one below the cards.");
+        toast.error("That microphone isn’t available. Choose another in Settings.");
       } else if (error instanceof TalkApiError) {
         toast.error(error.message);
       } else {
@@ -259,47 +309,35 @@ export default function Console({ userName, appliancePassword }: { userName: str
     [setView],
   );
 
-  /** Listen for one thing someone says, then get reply suggestions for it. */
-  const startListening = useCallback(async () => {
-    abortWork();
-    stopSpeaking();
+  /** Explicit local capture is available on the listening page when no phone is paired online. */
+  const startLocalListening = async () => {
+    if (view.name !== "listen" || connected || request.current || phoneCapture.current || settingsOpen || mode === "setup") return;
+    const controller = new AbortController();
+    request.current = controller;
     setView({ name: "listening", speaking: false });
-
-    if (connection.phone && connection.hub && connection.status === "connected") {
-      const id = `u_${crypto.randomUUID()}`;
-      const timer = setTimeout(() => {
-        abortWork(); toast.error("The phone did not finish processing speech. Try again."); setView({ name: "no-speech" });
-      }, 100_000);
-      phoneCapture.current = { id, hub: connection.hub, timer };
-      try { connection.hub.send({ type: "listen", action: "start", request_id: id, conversationId: conversationId.current, ts: Date.now() }); }
-      catch (error) { abortWork(); showError(error); }
-      return;
-    }
-
     let rec: UtteranceRecorder;
     try {
       rec = await UtteranceRecorder.start({
-        deviceId: micId || undefined,
-        onLevel: setMicLevel,
+        deviceId: micId || undefined, signal: controller.signal,
         onSpeechStart: () => setView({ name: "listening", speaking: true }),
       });
     } catch (error) {
-      return showError(error);
+      if (!controller.signal.aborted) { request.current = null; showError(error); }
+      return;
     }
+    if (controller.signal.aborted) { rec.cancel(); return; }
     recorder.current = rec;
     setMicListVersion((v) => v + 1); // permission granted → device labels are available now
 
     try {
       const recording = await rec.done;
+      if (controller.signal.aborted) return;
       recorder.current = null;
-      setMicLevel(0);
       if (!recording.hadSpeech) return setView({ name: "no-speech" });
 
       setView({ name: "thinking" });
-      const controller = new AbortController();
-      request.current = controller;
       const result = await talkApi.utterance(recording.wav, conversationId.current, controller.signal);
-      request.current = null;
+      if (controller.signal.aborted) return;
       conversationId.current = result.conversationId ?? conversationId.current;
 
       if (result.status === "no_speech") return setView({ name: "no-speech" });
@@ -313,9 +351,9 @@ export default function Console({ userName, appliancePassword }: { userName: str
         lowConfidence: result.lowConfidence,
       });
     } catch (error) {
-      showError(error);
-    }
-  }, [abortWork, announceSwitch, micId, setView, showError, connection.phone, connection.hub, connection.status]);
+      if (!controller.signal.aborted) showError(error);
+    } finally { if (request.current === controller) request.current = null; }
+  };
 
   const moreReplies = useCallback(
     async (heard: string) => {
@@ -326,62 +364,51 @@ export default function Console({ userName, appliancePassword }: { userName: str
       request.current = controller;
       try {
         const result = await talkApi.moreReplies(conversationId.current, controller.signal);
-        request.current = null;
+        if (controller.signal.aborted) return;
         setView({ name: "suggestions", utteranceId: result.conversationId, heard: result.heard, replies: result.replies, lowConfidence: result.lowConfidence });
       } catch (error) {
-        showError(error);
-      }
+        if (!controller.signal.aborted) showError(error);
+      } finally { if (request.current === controller) request.current = null; }
     },
     [abortWork, setView, showError],
   );
 
   /**
    * Speak a confirmed reply: through the robot phone when it's connected (it reports tts_status),
-   * otherwise on this laptop. Talk replies join the conversation's AutoSage chat, and IRIS listens again.
+   * otherwise on this laptop. A new listening turn needs another approval.
    */
   async function speak(text: string, source: ReplySource) {
     const fromTalk = source === "suggestion" && conversationId.current !== null;
     if (fromTalk) void talkApi.spoken(conversationId.current!, text).catch(() => {});
+    const after = fromTalk ? "listen" : "home";
     const speakId = `s_${crypto.randomUUID()}`;
 
     if (connection.hub && connection.phone && connection.status === "connected") {
       try {
         connection.hub.send({ type: "speak", speak_id: speakId, text, source, ts: Date.now() });
-        resumeListening.current = fromTalk;
-        setView({ name: "speaking", text, speakId });
+        setView({ name: "speaking", text, speakId, after });
       } catch (cause) {
         toast.error(cause instanceof Error ? cause.message : "Could not send speech");
       }
       return;
     }
 
-    setView({ name: "speaking", text, speakId });
+    setView({ name: "speaking", text, speakId, after });
     await speakAloud(text);
-    if (fromTalk) void startListening();
-    else setView({ name: "home" });
+    dispatch({ type: "event", message: { type: "tts_status", speak_id: speakId, state: "finished" } });
   }
-
-  // When the phone confirms it finished a talk reply, keep the conversation going.
-  const previousView = useRef(view.name);
-  useEffect(() => {
-    const wasSpeaking = previousView.current === "speaking";
-    previousView.current = view.name;
-    if (wasSpeaking && view.name === "home" && resumeListening.current) {
-      resumeListening.current = false;
-      void startListening();
-    }
-  }, [view.name, startListening]);
 
   useEffect(() => () => abortWork(), [abortWork]);
   useEffect(() => () => stopSpeaking(), []);
   useEffect(() => () => endConversation(), [endConversation]);
 
-  const goHome = () => {
+  const leaveConversation = (name: "home" | "drive") => {
     abortWork();
     stopSpeaking();
     endConversation();
-    setView({ name: "home" });
+    setView({ name });
   };
+  const goHome = () => leaveConversation("home");
 
   async function signOut() {
     if (signingOut) return;
@@ -406,11 +433,18 @@ export default function Console({ userName, appliancePassword }: { userName: str
       abortWork();
       stopSpeaking();
       endConversation();
+      if (view.name === "listening" || view.name === "thinking") setView({ name: "listen" });
     }
     setMode(next);
-  }, [stop, abortWork, endConversation]);
+  }, [stop, abortWork, endConversation, setView, view.name]);
 
-  const settingsButton = useDwell(() => setSettingsOpen(true));
+  const settingsButton = useDwell(() => {
+    if (view.name === "listening" || view.name === "thinking") {
+      abortWork();
+      setView({ name: "listen" });
+    }
+    setSettingsOpen(true);
+  });
   const signOutButton = useDwell(() => void signOut(), { ms: 1500, disabled: signingOut });
 
   // ───────────────────────────── panel content per view ─────────────────────────────
@@ -430,7 +464,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
     kind: "action", key: "drive", title: "Drive", icon: Navigation, tone: "teal",
     pressed: view.name === "drive",
     hint: view.name === "drive" ? "Select again for main actions" : hasFeed ? "Open directional controls" : "Connect the phone to drive",
-    onSelect: view.name === "drive" ? goHome : () => setView({ name: "drive" }),
+    onSelect: () => leaveConversation(view.name === "drive" ? "home" : "drive"),
   };
   let cards: PanelCard[] = [];
   let feedStatus: string | null = null;
@@ -461,27 +495,38 @@ export default function Console({ userName, appliancePassword }: { userName: str
           hint: phrasesOpen ? "Select again to close phrases" : "Choose words to speak", icon: MessageSquareText, tone: "sky",
           onSelect: () => setView({ name: phrasesOpen ? "communicate" : "phrases" }) },
         communicateCard,
-        { kind: "action", key: "listen", title: "Listen and reply", hint: "Listen to someone and choose a reply", icon: Ear, tone: "teal", onSelect: () => void startListening() },
+        { kind: "action", key: "listen", title: "Listen and reply", hint: "Listen to someone and choose a reply", icon: Ear, tone: "teal", onSelect: () => setView({ name: "listen" }) },
       ];
       if (phrasesOpen) options = QUICK_PHRASES.map((text, i) => ({
         kind: "action", key: text, title: text, tone: TONES[i]!, onSelect: () => confirm(text, view),
       }));
       break;
 
+    case "listen":
+      heading = pendingId ? "The person at the robot is asking to speak" : "Listen and reply";
+      cards = [driveCard];
+      if (pendingId) {
+        cards.push({ kind: "action", key: "allow", title: "Allow microphone", hint: "Listen to the robot phone for one turn", tone: "teal", onSelect: approveListening },
+          { kind: "action", key: "decline", title: "Decline", tone: "plain", onSelect: () => clearPhoneTurn(true) });
+      } else {
+        cards.push(connected
+          ? { kind: "preview", key: "waiting", text: "Waiting for a request", hint: "The person at the robot can request the microphone on the phone." }
+          : { kind: "action", key: "local", title: "Use laptop microphone", hint: "Record one turn on this device", tone: "teal", onSelect: () => void startLocalListening() },
+          { kind: "action", key: "close", title: "Close listening", tone: "plain", onSelect: goHome });
+      }
+      break;
+
     case "listening":
       heading = view.speaking ? "Hearing them…" : "Listening…";
       feedStatus = view.speaking ? "Hearing someone speak" : "Listening for someone to speak";
       cards = [
-        {
-          kind: "preview",
-          key: "listening",
-          text: view.speaking ? "Hearing them…" : "Waiting for someone to speak",
-          hint: "Stops on its own when they finish",
-          level: micLevel,
-        },
+        driveCard,
         { kind: "action", key: "done", title: "They’re done", icon: Square, tone: "honey", onSelect: () => {
           const capture = phoneCapture.current;
-          if (capture) capture.hub.send({ type: "listen", action: "stop", request_id: capture.id, ts: Date.now() });
+          if (capture?.approved) {
+            try { capture.hub.send({ type: "listen", action: "stop", request_id: capture.id, ts: Date.now() }); }
+            catch { abortWork(); setView({ name: "listen" }); }
+          }
           else recorder.current?.stop();
         } },
         { kind: "action", key: "cancel", title: "Cancel", icon: X, tone: "plain", onSelect: goHome },
@@ -491,14 +536,14 @@ export default function Console({ userName, appliancePassword }: { userName: str
     case "thinking":
       heading = "Finding replies…";
       feedStatus = view.heard ? null : "Understanding what they said";
-      cards = [{ kind: "preview", key: "thinking", text: view.heard ? "Writing new replies…" : "Understanding what they said…", busy: true }];
+      cards = [driveCard, { kind: "preview", key: "thinking", text: view.heard ? "Writing new replies…" : "Understanding what they said…", busy: true }];
       cards.push({ kind: "action", key: "cancel", title: "Cancel request", tone: "honey", onSelect: goHome });
       break;
 
     case "no-speech":
       heading = "Didn’t catch that";
       cards = [
-        { kind: "action", key: "again", title: "Listen again", icon: Ear, tone: "teal", onSelect: () => void startListening() },
+        { kind: "action", key: "again", title: "Listen again", icon: Ear, tone: "teal", onSelect: () => setView({ name: "listen" }) },
         { kind: "action", key: "phrases", title: "Quick phrases", icon: MessageSquareText, tone: "honey", onSelect: () => setView({ name: "phrases" }) },
         { kind: "action", key: "home", title: "Finish conversation", tone: "honey", onSelect: goHome },
       ];
@@ -571,14 +616,14 @@ export default function Console({ userName, appliancePassword }: { userName: str
       break;
   }
 
+  if (["suggestions", "no-speech", "confirm", "speaking"].includes(view.name)) options.unshift(driveCard);
+
   const heard =
     view.name === "suggestions"
       ? view.heard
       : view.name === "thinking"
         ? (view.heard ?? null)
-        : view.name === "listening" || view.name === "no-speech"
-          ? null
-          : conversation.heard;
+        : null;
 
   return (
     <main aria-label="Patient dashboard" className="patient-console flex h-dvh flex-col gap-3 bg-mist p-3 text-pine md:gap-4 md:p-4">
@@ -614,7 +659,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
                   : "Someone nearby said"
             }
             status={feedStatus}
-            listening={conversation.activeSpeech || (view.name === "listening" && view.speaking)}
+            listening={view.name === "listening" && view.speaking}
             menu={<ConnectionBar connection={connection} />}
           />
 

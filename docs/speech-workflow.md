@@ -1,16 +1,15 @@
-# Deepgram phone speech (IRIS 0.7.0)
+# Patient-approved phone speech
 
-The default Android flow streams 16 kHz mono PCM through the authenticated `/api/mobile/speech` server WebSocket. Deepgram Nova-3 provides transcription and speech activity detection (`vad_events=true`); endpointing and utterance-end detection use a 1.6-second pause. Only finalized transcripts with confidence at least 0.55 enter the existing reply service. Interim results never generate replies. The console can still explicitly start, stop or cancel capture.
+1. Connect the robot phone and dashboard using the same patient account. The person at the robot selects **Request microphone** in IRIS.
+2. Open **Communicate → Listen and reply** on the patient dashboard. Only the signed-in patient in that pair can approve the request. Selecting **Allow microphone** starts one turn. A request expires after 60 seconds.
+3. The phone shows **Stop microphone** while capturing. Tap it to finish early. Capture also ends on speech completion, cancellation, disconnect or a 30-second limit. The overall server grant expires within 100 seconds of approval, including processing.
+4. **Drive** immediately cancels any pending capture or processing on the dashboard and sends cancellation to the phone. Late results are discarded. After **Speak it**, the dashboard waits for a fresh request.
 
-Confirmed speech is synthesized with Deepgram Aura-2 Thalia through authenticated `POST /api/mobile/tts`, then played on the phone as 24 kHz WAV. Capture pauses during synthesis and playback and resumes after an echo settling delay. Errors are visible on the phone and reported through the existing TTS status protocol.
+The default speech path streams approved 16 kHz mono PCM through the authenticated server WebSocket to Deepgram. Android speech recognition is an alternative for an approved turn. In either case the API binds the request to the phone credential and approving browser session, accepts one utterance, and delivers results only to that dashboard. Phone video can stay connected during Drive. Outgoing phone microphone audio, including the WebRTC audio track, is enabled only during approved capture.
 
-Set `DEEPGRAM_API_KEY` only in the ignored `apps/server/.env`. Optional model overrides are `DEEPGRAM_STT_MODEL` (default `nova-3`) and `DEEPGRAM_TTS_MODEL` (default `aura-2-thalia-en`). The key is never bundled into the APK. Reply generation still requires the configured AutoSage/OpenRouter provider. Android recognition remains an explicit fallback; the default flow uses Deepgram.
+Configure `DEEPGRAM_API_KEY` on the server for the default speech path and voice synthesis. Reply generation uses the configured Talk provider. On a laptop without a paired phone, use **Use laptop microphone** on the listening page to explicitly record one turn.
 
-Restart the API, install the rebuilt APK, sign in with the same patient account as the console, and start IRIS. Check automatic speech detection, pause mid-sentence, confirm a suggested reply, and verify the phone does not transcribe its own playback. Also check cancellation, network loss, and session expiration on a real handset. Cloud audio requires a working server connection.
-
-Provider references: [Deepgram endpointing](https://developers.deepgram.com/docs/endpointing/) and [TTS WAV container](https://developers.deepgram.com/docs/tts-container).
-
-The sections below describe earlier releases and are retained as historical context.
+## Historical workflows
 
 # Automatic phone speech (IRIS 0.6.2)
 

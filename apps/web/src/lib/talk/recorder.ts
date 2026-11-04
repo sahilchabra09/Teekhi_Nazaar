@@ -16,6 +16,7 @@ export type Recording = { wav: Blob; durationMs: number; hadSpeech: boolean };
 
 export type RecorderOptions = {
   deviceId?: string;
+  signal?: AbortSignal;
   /** Stop after this much silence once someone has spoken. */
   silenceMs?: number;
   /** Give up if nobody speaks within this time. */
@@ -59,6 +60,10 @@ export class UtteranceRecorder {
 
   static async start(opts: RecorderOptions = {}) {
     const rec = new UtteranceRecorder();
+    const abort = () => rec.cancel();
+    opts.signal?.throwIfAborted();
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    rec.cleanupFns.push(() => opts.signal?.removeEventListener("abort", abort));
     try { await rec.begin(opts); }
     catch (error) { rec.teardown(); throw error; }
     return rec;
@@ -98,9 +103,11 @@ export class UtteranceRecorder {
     });
     this.cleanupFns.push(() => stream.getTracks().forEach((t) => t.stop()));
 
+    opts.signal?.throwIfAborted();
     const ctx = new AudioContext();
     this.cleanupFns.push(() => void ctx.close());
     await ctx.resume();
+    opts.signal?.throwIfAborted();
     const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
     try {
       await ctx.audioWorklet.addModule(url);
@@ -108,6 +115,7 @@ export class UtteranceRecorder {
       URL.revokeObjectURL(url);
     }
 
+    opts.signal?.throwIfAborted();
     const source = ctx.createMediaStreamSource(stream);
     const tap = new AudioWorkletNode(ctx, "iris-tap");
     source.connect(tap);

@@ -57,3 +57,12 @@ test("no-audio timeout releases capture even when the worklet supplies no frames
   expect((await rec.done).hadSpeech).toBe(false);
   expect(tap.port.onmessage).toBe(null);
 });
+
+test("canceling before a microphone grant releases the newly acquired track without recording", async () => {
+  const controller = new AbortController();
+  const before = stopped;
+  const starting = UtteranceRecorder.start({ signal: controller.signal });
+  controller.abort();
+  await expect(starting).rejects.toMatchObject({ name: "AbortError" });
+  expect(stopped).toBe(before + 1);
+});

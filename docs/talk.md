@@ -1,6 +1,6 @@
 # Say something: listen, transcribe, suggest replies
 
-> **IRIS 0.6.1:** both phone capture and console Say something use the connected phone microphone and the same Talk pipeline. Laptop capture is the fallback when no phone is connected. See [current speech workflow](./speech-workflow.md); the older migration discussion below is historical.
+> The current phone workflow requires a per-turn request and patient approval. See the [speech workflow](./speech-workflow.md). The earlier migration discussion below is historical.
 
 > **Update (AutoSage):** replies now come from **AutoSage fast-query on the patient's medical knowledge base**, and every conversation lives in **one AutoSage chat**. The OpenRouter reply models below are the **fallback**. The talk routes now take a `conversationId` and require the **patient** role. See [care.md](./care.md) §4–5 and §7 for the changed API.
 
@@ -59,21 +59,21 @@ sequenceDiagram
 
 ## 3. What changed in the console
 
-The **Say something** card now starts a conversation. The quick phrases moved to the "Didn't catch that" view.
+Open **Communicate** and choose **Listen and reply** or **Quick phrases**. Selecting an open section again closes it.
 
-| View | Panel heading | Three cards | Camera feed |
+| View | Panel heading | Patient controls | Camera feed |
 |---|---|---|---|
 | **Listening** | Listening… / Hearing them… | Live mic-level meter · **They're done** (stop now) · **Cancel** | Pill: "Listening for someone to speak" |
-| **Thinking** | Finding replies… | "Understanding what they said…" (+ Cancel pill) | Pill: "Understanding what they said" |
-| **Suggestions** | Pick a reply, or *Not sure I heard right* when confidence is low | The 3 replies (teal / honey / sky). Pills: **New replies**, **Ignore** | Honey bubble: *Someone nearby said "…"* |
-| **Didn't catch that** | Didn't catch that | **Listen again** · **Quick phrases** · **Go back** | — |
+| **Thinking** | Finding replies… | "Understanding what they said…" · **Cancel request** | Pill: "Understanding what they said" |
+| **Suggestions** | Pick a reply, or *Could you repeat that?* when confidence is low | For a clear utterance, three reply cards. **Ignore** and, for an active conversation, **New replies** sit below the video | Honey bubble: *Someone nearby said "…"* |
+| **Didn't catch that** | Didn't catch that | **Listen again** · **Quick phrases** · **Finish conversation** | — |
 | **Confirm** | Say this out loud? | Preview · **Speak it** · **Cancel** | — |
 | **Speaking** | IRIS is speaking | Text + speaking bars | — |
 
-- **Every card and pill uses dwell-to-select** (`useDwell`), so the whole flow works with gaze. That fixes gaze-connects' press-and-hold button.
-- **Confirmation step:** nothing is spoken without "Speak it". gaze-connects spoke on a single click.
-- **Conversation mode:** after a suggested reply is spoken, the console starts listening again on its own, because the other person usually answers. "Cancel" leaves conversation mode.
-- **Mic picker (testing aid):** sits in the panel footer, above the user name. It lists every audio input and remembers the choice in `localStorage` (`iris.micDeviceId`). Device names appear after the first mic permission is granted.
+- Each action card supports gaze selection, keyboard activation and clicking.
+- Choose **Speak it** to speak a phrase or reply. **Cancel** returns to the choices.
+- **Conversation mode:** after a suggested reply is spoken, the console waits for another request. Each new turn requires approval.
+- Choose a microphone in **Settings** on the patient bar. Device names appear after the browser grants microphone access.
 
 ---
 
@@ -192,7 +192,7 @@ The console now has the phone pairing bar from the Android companion (docs/mobil
 | **Speak it** | **Phone connected → `speak` over the hub** (the phone says it and reports `tts_status`); **no phone → spoken on the laptop** | Same |
 | After speaking a talk reply | `/api/talk/spoken` records it in the conversation's AutoSage chat, then IRIS listens again (on the phone path once `tts_status: finished` arrives) | — |
 
-Hub suggestions that are low-confidence show the phone flow's "Could you repeat that?" cards. Talk replies stay pickable, because AutoSage already phrases unsure replies as clarifying questions, and they get a **New replies** pill.
+Hub suggestions that are low-confidence show the phone flow's "Could you repeat that?" cards. Talk replies stay pickable, because AutoSage already phrases unsure replies as clarifying questions, and they get a **New replies** card.
 
 ## 6c. New person, new conversation
 

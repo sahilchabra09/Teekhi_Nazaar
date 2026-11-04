@@ -44,6 +44,14 @@ The phone enforces authorization and drive readiness locally. A broker PUBACK re
 
 In **Drive**, select **Drive** again to leave driving. Use the center **Stop** target to disarm the phone while staying in Drive. During eye setup, select an available numbered step to revisit it.
 
+## Approve a listening turn
+
+The person at the robot requests the microphone on the phone. On the paired patient dashboard, open **Communicate → Listen and reply**. Select **Allow microphone** to begin one turn immediately, or **Decline**. A pending request expires after 60 seconds. Requests never open a screen over Drive.
+
+During an approved turn, the phone shows a power-style **Stop microphone** button. Select it to finish early. It disappears when capture ends, including at the 30-second capture limit. Select **Drive** on the dashboard at any point to cancel and discard the turn. Opening Drive leaves movement subject to its usual authorization and directional hold. Speaking a reply returns to the listening page and requires a new request for the next turn.
+
+With no connected phone, **Use laptop microphone** explicitly records one local turn. The camera choice and microphone selection are in **Settings**.
+
 ## Switch appliances
 
 Choose **Appliances** to switch either of the two outputs below. Select the highlighted **Back to actions** card to return to the main menu. The signed-in console gets the configured appliance password from the web server automatically. The mounted phone keeps the robot's driving password separately.
