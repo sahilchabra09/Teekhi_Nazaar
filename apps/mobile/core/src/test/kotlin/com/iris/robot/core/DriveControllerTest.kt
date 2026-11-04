@@ -21,6 +21,63 @@ class DriveControllerTest {
     private fun intent(seq: Long = 1, action: String = "forward", sent: Long = epoch) = DriveIntent(
         "drive_intent", "esp12e_carbot", "session-a", "cmd-$seq", seq, action, 40, Instant.ofEpochMilli(sent).toString(), 300,
     ).signed()
+    @Test fun `signed letters decode on Topic 1 and keep the word client's gyro behavior`() {
+        for ((letter, word) in mapOf("F" to "forward", "B" to "backward", "R" to "right", "L" to "left", "S" to "stop")) {
+            val numeric = ready()
+            val legacy = ready()
+            val json = Protocol.json.encodeToString(DriveIntent.serializer(), intent(action = letter))
+            assertTrue(numeric.accept(Protocol.json.decodeFromString<DriveIntent>(json), false, 1000))
+            assertTrue(legacy.accept(intent(action = word), false, 1000))
+            val pose = Pose(7.0, 2.0, -1.0, 4.0, 1100)
+            numeric.updatePose(pose); legacy.updatePose(pose)
+            assertEquals(legacy.tick(1100), numeric.tick(1100))
+            assertEquals(letter, numeric.output.cmd)
+        }
+        val c = ready()
+        assertTrue(c.accept(intent(action = "F"), false, 1000))
+        c.updatePose(Pose(10.0, 0.0, 0.0, 0.0, 1100))
+        assertTrue(c.accept(intent(2, "forward", epoch + 100), false, 1100))
+        assertEquals(0.0, c.targetHeading)
+        assertFalse(c.accept(intent(3, "F", epoch + 100).copy(action = "forward"), false, 1100))
+    }
+
+    @Test fun `camera steps use reported angle stop wheels and resist repeated or expired frames`() {
+        val c = ready()
+        c.espSeen(1000, 172)
+        assertTrue(c.accept(intent(action = "F"), false, 1000))
+        assertTrue(c.output.armed)
+        assertTrue(c.accept(intent(2, "U"), false, 1000))
+        assertEquals(DriveOutput(servo = 177), c.output)
+        assertFalse(c.accept(intent(2, "U"), false, 1010))
+        c.espSeen(1050, 172) // a delayed status must not rewind an active tilt
+        assertTrue(c.accept(intent(3, "U", epoch + 100), false, 1100))
+        assertEquals(177, c.output.servo)
+        c.updatePose(Pose(0.0, 0.0, 0.0, 0.0, 1200))
+        assertTrue(c.accept(intent(4, "U", epoch + 200), false, 1200))
+        assertEquals(180, c.output.servo)
+        assertTrue(c.accept(intent(5, "D", epoch + 400), false, 1400))
+        assertEquals(175, c.output.servo)
+        assertEquals("""{"password":"unit-only","servo":175}""",
+            Protocol.json.encodeToString(ServoCommand.serializer(), ServoCommand("unit-only", c.output.servo!!)))
+        c.updatePose(Pose(0.0, 0.0, 0.0, 0.0, 1700))
+        assertEquals(DriveOutput(), c.tick(1700))
+        assertFalse(c.enabled)
+    }
+
+    @Test fun `down stops at lower limit and rejected tilt cannot move the camera`() {
+        val c = ready()
+        c.espSeen(1000, 62)
+        assertFalse(c.accept(intent(action = "D"), true, 1000))
+        assertFalse(c.accept(intent(action = "up").copy(action = "D"), false, 1000))
+        assertNull(c.output.servo)
+        assertTrue(c.accept(intent(action = "D"), false, 1000))
+        assertEquals(60, c.output.servo)
+        val missing = ready()
+        assertTrue(missing.accept(intent(action = "U"), false, 1000))
+        assertEquals(DriveOutput(), missing.output)
+        assertFalse(missing.enabled)
+    }
+
     @Test fun `signed grants reject missing proof and altered fields without advancing sequence`() {
         val c = ready()
         val value = Protocol.json.decodeFromString<SessionGrant>("""{"device_id":"esp12e_carbot","control_session_id":"session-a","server_time_ms":$epoch,"expires_at_ms":${epoch + 10000},"signing_key":"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"}""")

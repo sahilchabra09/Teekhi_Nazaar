@@ -48,7 +48,7 @@ class RobotMqttClient(
                             // Minimal online and malformed/other-device status do not satisfy readiness.
                             if (status.device_id == controller.deviceId && status.status == "online" && status.left_speed in -100..100 &&
                                 status.right_speed in -100..100 && status.uptime != null && status.phone_control_active != null) {
-                                controller.espSeen(SystemClock.elapsedRealtime())
+                                controller.espSeen(SystemClock.elapsedRealtime(), status.servo_angle)
                             }
                         }
                     }
@@ -63,7 +63,13 @@ class RobotMqttClient(
                 val output = controller.tick(now)
                 if (online) {
                     if (output.armed) publishOutput(output, 0)
-                    else if (lastOutput.armed) stopOutput()
+                    else if (lastOutput.armed || (output.servo != null && lastOutput.servo == null)) stopOutput()
+                    // Wheel disarm goes first when changing from driving to camera tilt.
+                    // The ESP handles servo only in a separate, non-phone-control packet.
+                    val angle = output.servo
+                    if (online && angle != null && angle != lastOutput.servo) {
+                        publish("carbot/command", Protocol.json.encodeToString(ServoCommand(settings.espPassword, angle)), 1)
+                    }
                     val status = controller.status(now)
                     if (now - lastStatus >= 1000 || status.state != lastState) {
                         publish(intentTopic, Protocol.json.encodeToString(status), 0)

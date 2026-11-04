@@ -104,8 +104,10 @@ data class SessionRevoked(val device_id: String, val control_session_id: String,
     val left_speed: Int? = null,
     val right_speed: Int? = null,
     val phone_control_active: Boolean? = null,
+    val servo_angle: Int? = null,
     val uptime: Long? = null,
 )
+@Serializable data class ServoCommand(val password: String, val servo: Int)
 @Serializable data class WheelCommand(
     val password: String,
     val left: Int,

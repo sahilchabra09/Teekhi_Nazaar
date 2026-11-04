@@ -103,3 +103,11 @@ export function RobotVideo({ hub, patientWebcam }: {
 Hub shape is `{ send(message): void; on(type, callback): () => void }`. Use one stable hub object, not a new wrapper on every render. Pass the gaze module's existing webcam stream; do not open a second camera. A webcam arriving later replaces the negotiated video sender without replacing the peer. The hook never sends laptop audio and never stops caller-owned tracks. Use a user gesture to unmute/play received robot audio if the browser blocks autoplay.
 
 Use the main authenticated console at `/` for integration checks. Only one console tab may occupy the web role at a time.
+
+## Android command translation
+
+On `teekhi-nazaar/esp12e_carbot/intent`, send the usual signed `drive_intent` JSON envelope. The `action` field accepts `F`, `B`, `L`, `R`, `U`, `D`, and `S`, or the corresponding lowercase words. Sign the action exactly as sent. Existing session, sequence, speed (0–100), freshness, and explicit Enable requirements apply. Zero speed or S disarms. Renew held intentions at 100 ms intervals.
+
+F/B hold the heading measured at direction entry. L/R pivot with yaw-rate correction. The mounted Android phone samples the rotation vector and projects its gyroscope onto the vertical axis. Hold the mount upright and still for about 1–2 seconds before calibration. The phone averages 24 fresh orientation samples around the circle, smooths relative angles, and passes signed integer wheel efforts in the ESP's phone-control envelope on `carbot/command`.
+
+U/D control camera tilt with the wheels stopped. Positive speed permits a step. The phone starts at the ESP's reported `servo_angle`, steps by 5 degrees at most once every 200 ms of renewed input, and clamps to 60–180 degrees. The ESP expects a separate `{"password":"<ESP password>","servo":95}` message on the same topic. Missing valid servo telemetry prevents tilt. The current website sends word-form drive actions; other authorized controllers can send the letter forms. The standalone appliance board has a different firmware and topics.

@@ -6,7 +6,7 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.math.roundToInt
 
 data class Pose(val heading: Double, val pitch: Double, val roll: Double, val yawRate: Double, val atMs: Long)
-data class DriveOutput(val left: Int = 0, val right: Int = 0, val armed: Boolean = false, val cmd: String = "S")
+data class DriveOutput(val left: Int = 0, val right: Int = 0, val armed: Boolean = false, val cmd: String = "S", val servo: Int? = null)
 
 /** All entry points are called on one controller thread. Times are monotonic milliseconds. */
 class DriveController(val deviceId: String = "esp12e_carbot") {
@@ -28,20 +28,34 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
     private var clockUpperBound = 0L
     private var sequence = -1L
     private val commandIds = LinkedHashSet<String>()
-    private var intent: DriveIntent? = null
+    private var command: String? = null
+    private var requestedSpeed = 0
+    private var servoTarget: Int? = null
+    private var servoReportedAt: Long? = null
+    private var nextServoStepAt = 0L
     private var intentExpires = 0L
     private var foreground = true
 
     fun connectivity(value: Boolean) {
         connected = value
-        if (!value) { espAt = Long.MIN_VALUE; revoke("Broker disconnected") }
+        if (!value) { espAt = Long.MIN_VALUE; servoTarget = null; servoReportedAt = null; revoke("Broker disconnected") }
         else disarm("Connected; calibrate and fetch a session")
     }
     fun backendConnectivity(value: Boolean) {
         backendConnected = value
         if (!value) revoke("Backend hub disconnected")
     }
-    fun espSeen(now: Long) { espAt = now }
+    fun espSeen(now: Long, servoAngle: Int? = null) {
+        espAt = now
+        if (servoAngle == null || servoAngle !in 60..180) {
+            servoReportedAt = null
+            servoTarget = null
+        } else {
+            // During a hold the ESP may still be reporting our previous target.
+            if (servoTarget == null || (command != "U" && command != "D")) servoTarget = servoAngle
+            servoReportedAt = now
+        }
+    }
     fun updatePose(value: Pose) {
         if (listOf(value.heading, value.pitch, value.roll, value.yawRate).all { it.isFinite() }) pose = value
         else { calibrated = false; disarm("Invalid orientation") }
@@ -96,10 +110,20 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
     fun enable(now: Long): Boolean {
         val problem = readiness(now)
         if (problem != null) { disarm(problem); return false }
-        enabled = true; intent = null; output = DriveOutput(); reason = "Ready; waiting for fresh intention"
+        enabled = true; command = null; output = DriveOutput(); reason = "Ready; waiting for fresh intention"
         return true
     }
     fun accept(value: DriveIntent, retained: Boolean, now: Long): Boolean {
+        val code = when (value.action) {
+            "F", "forward" -> "F"
+            "B", "backward" -> "B"
+            "L", "left" -> "L"
+            "R", "right" -> "R"
+            "U", "up" -> "U"
+            "D", "down" -> "D"
+            "S", "stop" -> "S"
+            else -> return false
+        }
         val g = grant ?: return false
         val sentAt = value.sentAtMs() ?: return false
         // Server epoch is anchored to elapsed time; changing the phone wall clock cannot revive a command.
@@ -110,18 +134,32 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
             value.control_session_id != sessionId || value.command_id.isBlank() || value.command_id.length > 128 ||
             '\n' in value.command_id || '\r' in value.command_id ||
             value.seq < 0 || value.seq <= sequence || value.command_id in commandIds ||
-            value.action !in setOf("forward", "backward", "left", "right", "stop") ||
             value.speed !in 0..100 || value.ttl_ms !in 1..g.max_ttl_ms ||
             age < 0 || age >= value.ttl_ms || now >= grantExpires || !hasValidSignature(value)) return false
         sequence = value.seq
         commandIds.add(value.command_id)
         if (commandIds.size > 256) commandIds.remove(commandIds.first())
         lastCommandId = value.command_id
-        if (value.action == "stop" || value.speed == 0) { disarm("Controller stopped"); return true }
+        if (code == "S" || value.speed == 0) { disarm("Controller stopped"); return true }
         if (!enabled || readiness(now) != null) { disarm(readiness(now) ?: "Enable required"); return false }
-        if (intent?.action != value.action) targetHeading = pose!!.heading
-        intent = value
+        if (command != code) targetHeading = pose!!.heading
+        command = code
+        requestedSpeed = value.speed
         intentExpires = now + (value.ttl_ms - age.coerceAtLeast(0))
+        if (code == "U" || code == "D") {
+            val base = servoTarget
+            val reportAt = servoReportedAt
+            if (base == null || reportAt == null || now - reportAt !in 0..6000) {
+                disarm("Waiting for ESP servo angle")
+                return true
+            }
+            if (now >= nextServoStepAt) {
+                servoTarget = (base + if (code == "U") 5 else -5).coerceIn(60, 180)
+                nextServoStepAt = now + 200
+            }
+            output = DriveOutput(servo = servoTarget)
+            reason = "Aiming camera"
+        }
         tick(now)
         return true
     }
@@ -135,30 +173,31 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
     fun tick(now: Long): DriveOutput {
         if (!enabled) return output
         readiness(now)?.let { disarm(it); return output }
-        val command = intent ?: return output
+        val code = command ?: return output
         if (now >= intentExpires) { disarm("Intention expired"); return output }
+        if (code == "U" || code == "D") return output
         val p = pose!!
-        val speed = command.speed.toDouble()
-        val (left, right) = when (command.action) {
-            "forward", "backward" -> {
-                val base = if (command.action == "forward") speed else -speed
+        val speed = requestedSpeed.toDouble()
+        val (left, right) = when (code) {
+            "F", "B" -> {
+                val base = if (code == "F") speed else -speed
                 // Same yaw sign while reversing. Low initial gains require chassis tuning.
                 val correction = (1.0 * angle(targetHeading - p.heading) - 0.12 * p.yawRate).coerceIn(-15.0, 15.0)
                 (base + correction) to (base - correction)
             }
             else -> {
-                val sign = if (command.action == "right") 1 else -1
+                val sign = if (code == "R") 1 else -1
                 val requestedRate = sign * speed * 0.9
                 val effort = (speed + sign * 0.1 * (requestedRate - p.yawRate)).coerceIn(0.0, speed + 15.0)
                 sign * effort to -sign * effort
             }
         }
         output = DriveOutput(left.roundToInt().coerceIn(-100, 100), right.roundToInt().coerceIn(-100, 100), true,
-            when (command.action) { "forward" -> "F"; "backward" -> "B"; "left" -> "L"; else -> "R" })
+            code)
         reason = "Driving"
         return output
     }
-    fun disarm(why: String) { enabled = false; intent = null; output = DriveOutput(); reason = why }
+    fun disarm(why: String) { enabled = false; command = null; output = DriveOutput(); reason = why }
     fun status(now: Long) = MobileStatus(
         device_id = deviceId, control_session_id = sessionId, last_command_id = lastCommandId,
         state = if (output.armed) "driving" else if (enabled) "ready" else if (readiness(now) != null) "fault" else "disarmed",
