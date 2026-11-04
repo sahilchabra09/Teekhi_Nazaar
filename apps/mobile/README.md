@@ -48,11 +48,11 @@ Native authorization state is intentionally in memory for this single-process AP
 
 ## Robot pairing and control
 
-After account linking, enable **Connect ESP robot controller** on setup and enter the ESP's current control password, broker URL and optional broker credentials. The account credential is attached automatically to session requests. Settings are encrypted with an Android Keystore AES-GCM key; backup is disabled. No control grant or cached movement is persisted. Account linking authorizes media only: `/api/mobile/session` returns 501 until robot ownership and MQTT publishing are configured, so driving remains disarmed.
+After account linking, enable **Connect ESP robot controller** on setup and enter the ESP's current control password, broker URL and optional broker credentials. The account credential is attached automatically to session requests. Settings are encrypted with an Android Keystore AES-GCM key; backup is disabled. No control grant or cached movement is persisted. Set `IRIS_ROBOT_OWNER_ID` on the API server to the permitted Better Auth user ID and restart it. With an empty owner the session endpoint returns 501 and driving stays disarmed. Only that owner’s current phone and console can share the short-lived signing key. A replacement or disconnect revokes their lease.
 
 Use the current ESP's exact topics and envelope:
 
-- Subscribe `teekhi-nazaar/esp12e_carbot/intent` for typed intentions and `carbot/status` for full status.
+- Subscribe `teekhi-nazaar/esp12e_carbot/intent` for HMAC-SHA256-signed intentions and `carbot/status` for full status. The phone receives the signing key privately through its authorized lease. Unsigned movement and STOP intentions are discarded.
 - Publish wheel output to `carbot/command` with `source:"lain-mobile"`, `phone_control:true`, `device_id:"esp12e_carbot"`, explicit `armed`, integer signed `left`/`right`, and the ESP password.
 - Drive output is QoS 0 every 100 ms. Stop/disarm is QoS 1. Nothing is retained; sessions are clean and movement is never queued for reconnect.
 
@@ -74,7 +74,7 @@ The default public broker matches the existing firmware's bench configuration. P
 
 ## Backend and web handoff
 
-See [backend-integration.md](docs/backend-integration.md) for implemented account/media routes and the remaining controller lease and speech-service contracts. Media/speech messages retain the shared `interfaces.md` contract.
+See [backend-integration.md](docs/backend-integration.md) for implemented account/media routes and the owner-gated controller leases and remaining speech-service integration. Media/speech messages retain the shared `interfaces.md` contract.
 
 ## Verification
 

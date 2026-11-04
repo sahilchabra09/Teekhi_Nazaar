@@ -18,6 +18,11 @@ class SessionClient(
     private val client = OkHttpClient.Builder().callTimeout(3, TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build()
     private var job: Job? = null
+    // Confined to the main dispatcher with the grant/revoke callbacks.
+    private var binding: String? = null
+    fun bind(value: String?) {
+        binding = value
+    }
     fun start() {
         job?.cancel()
         job = scope.launch {
@@ -27,11 +32,16 @@ class SessionClient(
                 revoke("Session authorization requires HTTPS; local bench HTTP must be enabled explicitly")
                 return@launch
             }
+            if (binding == null) revoke("Connect the authorized console and phone to fetch a drive session")
             while (isActive) {
+                val requestedBinding = binding
+                if (requestedBinding == null) { delay(2500); continue }
                 val start = SystemClock.elapsedRealtime()
                 try {
                     val response = withContext(Dispatchers.IO) {
-                        client.newCall(Request.Builder().url(url).header("Authorization", "Bearer ${settings.accountToken}").build()).execute().use { result ->
+                        client.newCall(Request.Builder().url(url)
+                            .header("Authorization", "Bearer ${settings.accountToken}")
+                            .header("X-IRIS-Drive-Binding", requestedBinding).build()).execute().use { result ->
                             require(result.isSuccessful) { "Backend session unavailable (HTTP ${result.code})" }
                             val body = result.body ?: throw IllegalStateException("Empty session response")
                             val source = body.source()
@@ -43,9 +53,10 @@ class SessionClient(
                     }
                     ensureActive()
                     val received = SystemClock.elapsedRealtime()
-                    grant(response, received, received - start)
+                    // A disconnected or replaced pair may have a successful HTTP response in flight.
+                    if (binding == requestedBinding) grant(response, received, received - start)
                 } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { revoke("Session authorization unavailable; driving disarmed") }
+                catch (_: Exception) { if (binding == requestedBinding) revoke("Session authorization unavailable; driving disarmed") }
                 delay(2500)
             }
         }

@@ -6,7 +6,7 @@ The authenticated console at `/` uses `useRobotConnection` and the shared `creat
 
 `NEXT_PUBLIC_SERVER_URL` points to the **same** Better Auth and media API (normally port 3000). The independent media URL override has been removed. On the phone, use that server's LAN IP or HTTPS hostname. See the [first-run instructions](../README.md#first-run).
 
-The backend authenticates both media roles and isolates rooms by the user ID obtained from Better Auth. The integrated `/api/talk/*` routes provide speech/replies with configured providers; the phone's separate `/api/utterance` bridge, robot ownership, MQTT intention publishing and controller leases remain integration work. Signing in does not grant motor control or doctor permissions. Role onboarding, care and Talk routes stay mounted beside the robot gateway. The unauthenticated development hub is only a test fixture.
+The backend authenticates both media roles and isolates rooms by the user ID obtained from Better Auth. The integrated `/api/talk/*` routes provide speech/replies with configured providers; the phone's separate `/api/utterance` bridge remains unconfigured. The server can authorize one owner for the paired robot console. Signing in does not grant motor control or doctor permissions. Role onboarding, care and Talk routes stay mounted beside the robot gateway. The unauthenticated development hub is only a test fixture.
 
 ## Implemented account authorization
 
@@ -41,52 +41,40 @@ Relay phone `rtc_offer`, `rtc_ice`, `frame`, `speech_activity`, `tts_status`, fa
 
 The phone always offers, including after hub reconnect. Relay web `media_ready` to the phone for a fresh offer after the console's listeners are installed. Legacy peer-presence startup remains supported. The web client must receive `peer_status.phone:false` on disconnect so its hook can release stale media. Only the web user confirmation flow may create `speak`; the mobile app does not choose replies.
 
-## Additional controller lease endpoint — proposed, must be implemented by backend
+## Owner-authorized driving
 
-The route exists but currently returns **401** without a valid account credential and **501** for linked phones. It does not mint a drive grant from media pairing.
+On the API server, set `IRIS_ROBOT_OWNER_ID` to the permitted user's **Better Auth user ID** and restart the single server process. An empty value disables all drive grants. The assignment applies only to `esp12e_carbot`.
 
-`GET /api/mobile/session?device_id=esp12e_carbot`
+1. The owner opens the console and connects a phone signed into the same account. The phone's authenticated WebSocket sends `hello` with `drive_proof: "hmac-sha256-v1"`. When both peers are present, the server privately sends the phone `{type:"drive_binding",device_id,binding,ts}`.
+2. **Fetch session** starts a poll every 2.5 seconds. The phone calls `GET /api/mobile/session?device_id=esp12e_carbot` with its bearer credential and the private `X-IRIS-Drive-Binding` header. Each poll verifies both peer identities and the current pair.
+3. HTTP returns `{device_id,control_session_id,signing_key,server_time_ms,expires_at_ms,max_ttl_ms:300}`. Only the matching console receives these fields over its authenticated WebSocket, with `type:"drive_grant"` and epoch-millisecond `ts`. The 32-byte signing key is encoded as 64 lowercase hexadecimal characters. Keep it in memory.
+4. The lease lasts at most 10 seconds. Polls before expiry renew the same UUID and key, keeping the phone's sequence history. Polls after expiry create a new UUID and key. Disconnecting or replacing either peer invalidates the binding and lease and sends `{type:"session_revoked",device_id,control_session_id,ts}` to connected peers. An HTTP response for a former binding is discarded by the phone.
+5. Calibrate and explicitly **Enable driving** on the phone. A valid grant alone leaves the wheels stopped. A new session, disconnect, expired intention or STOP disarms the controller.
 
-```http
-Authorization: Bearer <phone pairing/session token>
-```
+HTTP 401 means the phone credential is invalid, 403 means the owner or device does not match, 409 means the compatible pair or binding is unavailable, and 501 means the owner is unset. An HTTP or parsing failure disarms the phone. Socket or network failure is also bounded by the short lease and intention expiry.
 
-```json
-{
-  "device_id": "esp12e_carbot",
-  "control_session_id": "backend-issued-controller-session",
-  "server_time_ms": 1793748600000,
-  "expires_at_ms": 1793748610000,
-  "max_ttl_ms": 300
-}
-```
-
-Those timestamps are illustrative. Generate the current server time on **every** response. The backend must authenticate the token, check this phone is paired to this robot, enforce one active controller, and return **only an already-authorized active session**. Fetching a grant must not implicitly take ownership, authorize another controller, or start the robot. Return 401/403 when revoked or unauthorized, and 409 when no matching active controller exists. An MQTT intention cannot authorize its own session ID.
-
-The phone starts polling after the operator taps Fetch session, then refreshes every 2.5 seconds. Use a short lease such as **10 seconds**; the implementation rejects lifetime over 60 seconds, TTL outside 1–300 ms and request RTT above two seconds. Same-session renewal preserves sequence history; changed/expired sessions disarm. Any HTTP/JSON/transport failure revokes the local grant and stops output. Polling-based revocation is bounded by polling/request time and lease expiry, not instantaneous.
-
-Use authenticated HTTPS in deployment. The client does not follow redirects, so it cannot forward the token to another origin. An explicit phone setting permits HTTP only for localhost/private IPv4 LAN bench setups. No credentials should be placed in URLs or logs.
-
-The server epoch is anchored to the phone's monotonic elapsed clock. The full request RTT is treated conservatively as clock uncertainty: it shortens usable command TTL and lease lifetime rather than reviving old commands. Frontend publishers must synchronize timestamps with the backend. A slow network may safely reject movement instead of stretching expiry.
-
-For faster revocation, the authenticated hub may additionally send this **new optional message**:
-
-```json
-{
-  "type": "session_revoked",
-  "device_id": "esp12e_carbot",
-  "control_session_id": "backend-issued-controller-session",
-  "ts": 1793748600500
-}
-```
-
-This optional extension is scoped to controller integration; it does not alter media messages. Normal `stop` messages also stop/disarm locally, without being echoed back to the hub.
+Use HTTPS/WSS for grants in deployment. The client rejects redirects. Its explicit local bench option permits HTTP only on localhost or private IPv4. The phone anchors server epoch to its monotonic clock and subtracts the full request RTT from its movement and lease budgets. It rejects RTTs over two seconds. The browser should stamp each command using the current server clock estimate.
 
 ## MQTT integration
 
-Follow `docs/robot-operation.md` for `drive_intent` and `mobile_status`. Backend/controller publishes fresh intentions roughly every 100 ms with new `command_id`, increasing `seq`, current UTC `sent_at`, TTL ≤300 ms, QoS 1 and `retain:false`. The phone rejects retained, expired, future, duplicate, out-of-order, malformed, mistargeted and wrong-session intentions. `mobile_status` is never treated as movement input.
+Follow `docs/robot-operation.md` for `drive_intent` and `mobile_status`. The paired browser publishes fresh intentions roughly every 100 ms with new `command_id`, increasing `seq`, current UTC `sent_at`, TTL ≤300 ms, QoS 1 and `retain:false`. The phone rejects retained, expired, future, duplicate, out-of-order, malformed, mistargeted and wrong-session intentions. `mobile_status` is never treated as movement input.
 
-Phone publishes signed wheel effort using the **existing** `lain-mobile` envelope to `carbot/command`; backend/frontend must not also drive that topic. Phone consumes nonretained full `carbot/status` updates. A successful publish is not proof of ESP execution, password correctness, or physical movement. Backend tokens and the ESP payload password serve different purposes; backend does not need that ESP password.
+The phone requires a 32-byte secret in the private grant and a lowercase hex HMAC-SHA256 `signature` on every intention, including STOP. Compute the MAC over UTF-8 values in this order, joined by one newline with no trailing newline. Integers use base ten and `sent_at` is the exact UTC ISO string sent on the wire.
+
+```text
+device_id
+control_session_id
+command_id
+seq
+action
+speed
+sent_at
+ttl_ms
+```
+
+Keep the key off MQTT. Invalid proofs cannot advance the sequence counter, refresh movement or stop the controller. The keyless development hub fixture cannot authorize Android driving.
+
+The phone publishes integer wheel effort using the **existing** `lain-mobile` envelope to `carbot/command`; backend/frontend must not also drive that topic. Phone consumes nonretained full `carbot/status` updates. A successful publish is not proof of ESP execution, password correctness, or physical movement. Backend tokens and the ESP payload password serve different purposes; backend does not need that ESP password.
 
 Broker credentials can be provisioned through phone setup. Broker identity and topic ACLs must enforce which controller can publish this robot's intentions. A session ID in a public MQTT payload is not a credential. ESP security/transport is unchanged by this app.
 

@@ -25,7 +25,7 @@ Automated compilation/tests are separate from these hardware checks. Record actu
 | Gyro feedback | Disturb heading in forward/reverse; renew held commands without losing target; turns do not fight heading hold | Pending; tune gains on this chassis |
 | Input expiry | Stop publishing intentions while broker remains connected | Pending; measure physical stopping time |
 | Faults | Stale sensors/status, revoked/expired session, broker loss, background, bump and tilt | Pending; each disarms and needs explicit enable |
-| Replay rejection | Retained/duplicate/old/future/wrong-session and wrong-device intentions do not start or extend driving | Pending |
+| Replay rejection | Unsigned, edited, retained, duplicate, old, future, wrong-session and wrong-device intentions do not start or extend driving | Pending |
 | Password mismatch | Incorrect ESP password has no motor effect; publish success does not prove execution | Pending |
 
 Start motor tests with wheels raised and an accessible physical power stop. Verify the fixed portrait mount and robot-yaw sign before tuning gains. The current ESP has no obstacle or desk-edge detector.

@@ -185,7 +185,7 @@ private class RobotSession(
         hub = HubClient(address, scope, { connected, label ->
             controller.backendConnectivity(connected)
             change { it.copy(hub = connected, hubLabel = label) }
-            if (!connected) { mqtt?.stopOutput(); rtc.peerAvailable(false); change { it.copy(web = false) } }
+            if (!connected) { sessions?.bind(null); mqtt?.stopOutput(); rtc.peerAvailable(false); change { it.copy(web = false) } }
         }, ::message, settings.accountToken, unauthorized)
         listener = Listener(context, address, scope, hub::send, { label, active ->
             change { if (it.speaking || it.androidStt) it else it.copy(listening = label, activeSpeech = active) }
@@ -223,7 +223,11 @@ private class RobotSession(
     }
     private fun message(msg: Msg) {
         when (msg) {
-            is PeerStatus -> { rtc.peerAvailable(msg.web); change { it.copy(web = msg.web) } }
+            is PeerStatus -> {
+                if (!msg.web) endDrivePair()
+                rtc.peerAvailable(msg.web); change { it.copy(web = msg.web) }
+            }
+            is DriveBinding -> if (msg.device_id == controller.deviceId) sessions?.bind(msg.binding)
             is MediaReady -> if (msg.device_id == controller.deviceId &&
                 (msg.control_session_id == null || controller.sessionId == null || msg.control_session_id == controller.sessionId)) {
                 rtc.requestOffer()
@@ -231,11 +235,16 @@ private class RobotSession(
             is Speak -> speaker.speak(msg)
             is RtcAnswer, is RtcIce -> rtc.accept(msg)
             is Stop -> mqtt?.stop("Hub requested stop")
-            is SessionRevoked -> if (msg.device_id == controller.deviceId && msg.control_session_id == controller.sessionId) {
-                controller.revoke("Backend revoked control session"); mqtt?.stopOutput()
-            }
+            is SessionRevoked -> if (msg.device_id == controller.deviceId) endDrivePair()
             is HubError -> error(msg.message)
             else -> Unit
+        }
+    }
+    private fun endDrivePair() {
+        sessions?.bind(null)
+        if (controller.sessionId != null) {
+            controller.revoke("Console disconnected or session revoked")
+            mqtt?.stopOutput()
         }
     }
     fun modes(forceJpeg: Boolean, recognize: Boolean) {
