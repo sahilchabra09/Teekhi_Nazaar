@@ -4,7 +4,7 @@ This is the frontend, backend, and mobile integration contract for Teekhi Nazaar
 
 There are two MQTT **movement command channels**. Topic 1 carries forward/backward/left/right/speed/stop intentions between the frontend/backend and the phone. Topic 2 carries translated wheel commands from the phone to the ESP. The ESP's existing status topic remains a separate feedback channel. In parallel, frontend ↔ backend and backend ↔ phone use WebSocket for session coordination, conversation, and media signalling.
 
-The ESP firmware described below exists in this repository. Topic 1, the mobile translation/controller, the backend WebSocket hub, and control-session handling are the planned integration. This documentation adds no mobile, frontend, backend, or firmware implementation. Names, fields, and timings marked **proposed** define a starting contract for those teams; they are not existing ESP features.
+The current console, Android controller and ESP firmware implement this two-topic path. The examples below describe the original design. For the required Topic 1 signature, owner setup and accepted controls, follow the [console control guide](controls.md) and [Android integration details](../apps/mobile/docs/backend-integration.md).
 
 ## System architecture and responsibilities
 

@@ -2,11 +2,13 @@
 
 ESP8266 robot firmware is in [`bot/`](bot/). It provides Wi-Fi setup, MQTT movement commands, motor control, and servo control without IR sensors. Local credentials are configured in an ignored header; see the setup guide before building. See [firmware setup](docs/firmware-setup.md), [MQTT commands](docs/mqtt.md), and [repository map](docs/repository-map.md).
 
+The patient console includes Screen 1 calibration and gaze selection for the robot feed and appliance cards. See [eye tracking setup](docs/hardware-gaze.md#screen-1-in-the-patient-console) and [appliance board wiring and installation](iot/README.md).
+
 The [robot operation and team integration guide](docs/robot-operation.md) explains the intended frontend/backend → mounted phone → ESP flow, both MQTT movement channels, the frontend/backend/mobile WebSocket application links, gyro feedback, and password/security behavior.
 
 Movement uses MQTT: frontend/backend intentions → mounted phone with gyro correction → ESP8266 wheel commands. Other application traffic uses WebSocket between frontend ↔ backend ↔ mobile. The [team plan](docs/PLAN.md) and [shared interfaces](docs/interfaces.md) follow this architecture.
 
-The native Kotlin [IRIS Android app](apps/mobile/README.md) matches the web console's clay UI and includes camera/audio streaming, speech playback and capture, motion sensing, and the phone-side MQTT controller. **Continue with Google** on both devices using the same email. Android returns from the browser to IRIS automatically; the backend matches the verified account and isolates its media. No OTP or manual laptop-linking step is needed. Its [backend handoff](apps/mobile/docs/backend-integration.md) documents implemented OAuth/media routes alongside care/Talk APIs and the remaining phone audio bridge, robot ownership and MQTT publisher work.
+The native Kotlin [IRIS Android app](apps/mobile/README.md) matches the web console's clay UI and includes camera/audio streaming, speech playback and capture, motion sensing, and the phone-side MQTT controller. **Continue with Google** on both devices using the same email. Android returns from the browser to IRIS automatically; the backend matches the verified account and isolates its media. No OTP or manual laptop-linking step is needed. Its [backend handoff](apps/mobile/docs/backend-integration.md) documents implemented OAuth/media routes alongside care/Talk APIs and the phone audio bridge and owner-restricted drive setup.
 
 This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines Next.js, Hono, and more.
 

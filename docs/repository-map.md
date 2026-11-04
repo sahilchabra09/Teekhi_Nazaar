@@ -4,14 +4,15 @@
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/web/`, `apps/server/`, `packages/` | Shared Better Auth Google sign-in, Android OAuth returns with PKCE, account-isolated media relay, care/RBAC and Talk APIs. The phone WAV bridge and robot ownership/MQTT publisher grants remain integration work. |
+| `apps/web/`, `apps/server/`, `packages/` | Shared Better Auth Google sign-in, Android OAuth returns with PKCE, account-isolated media relay, care/RBAC and Talk APIs. The configured robot owner can obtain a short-lived drive grant for the paired Screen 1 console and phone. |
 | `apps/mobile/` | Native IRIS Android companion with the frontend's clay styling, shared account sign-in, secure credential storage, Kotlin protocol/audio/controller core and device checklist. The development mock is an isolated protocol-test fixture. |
 | `bot/src/main.cpp` | ESP-12E firmware for motor/servo control and Wi-Fi provisioning, without IR sensors. |
+| `iot/` | Separate ESP8266 appliance firmware, three switched outputs and retained MQTT state. See [wiring and setup](../iot/README.md). |
 | `bot/platformio.ini` | Board, framework, library dependencies, serial speeds, and Apple Silicon compiler configuration. |
 | `pyproject.toml`, `uv.lock` | Independent uv-managed PlatformIO tooling; the Bun workspace continues to manage the web/server apps. |
 | `docs/firmware-setup.md` | Firmware build, upload, provisioning, and wiring instructions. |
 | `docs/mqtt.md` | MQTT topics, authentication, command fields, units, ranges, and examples. |
-| `docs/robot-operation.md` | Frontend/backend/mobile integration, proposed Topic 1 contract, existing ESP Topic 2 contract, gyro control, and password/security responsibilities. |
+| `docs/robot-operation.md` | Frontend/backend/mobile integration, Topic 1 contract, existing ESP Topic 2 contract, gyro control, and password/security responsibilities. |
 | `docs/PLAN.md`, `docs/interfaces.md` | Team ownership, MQTT movement routing, WebSocket application routing, control/session rules, and planned media/conversation events. |
 | `docs/backend-web.md`, `docs/mobile.md`, `docs/hardware-gaze.md` | Component contracts for MQTT movement and WebSocket application links. |
 
@@ -38,6 +39,6 @@ The broker and device ID/topics form the current interface. Other clients using 
 
 ## Mobile integration
 
-The [robot operation guide](robot-operation.md) describes the two-command-channel architecture. Frontend/backend send high-level intentions on Topic 1; the mounted phone combines them with orientation feedback and publishes the existing timeout-enabled wheel envelope to `carbot/command` (Topic 2). The ESP status channel remains `carbot/status`. Phone-side translation and Topic 1 validation are implemented in [apps/mobile](../apps/mobile/README.md). Backend publishers, authenticated session coordination, and hardware tuning/acceptance remain integration work; see the [mobile backend contract](../apps/mobile/docs/backend-integration.md).
+The [robot operation guide](robot-operation.md) describes the two-command-channel architecture. Frontend/backend send high-level intentions on Topic 1; the mounted phone combines them with orientation feedback and publishes the existing timeout-enabled wheel envelope to `carbot/command` (Topic 2). The ESP status channel remains `carbot/status`. Phone-side translation and Topic 1 validation are implemented in [apps/mobile](../apps/mobile/README.md). The website publishes dwell-accepted intentions with the active owner grant. See [console controls](controls.md) and the [mobile backend contract](../apps/mobile/docs/backend-integration.md) for signed payloads and hardware acceptance.
 
 Frontend ↔ backend and backend ↔ phone WebSocket connections carry session, conversation, and media-signalling events; movement intentions and ESP wheel commands remain on MQTT.

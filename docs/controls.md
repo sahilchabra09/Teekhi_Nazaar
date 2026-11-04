@@ -1,136 +1,62 @@
-# Robot driving and appliance control (browser → MQTT)
+# Patient console controls
 
-The patient console controls two devices **directly from the browser** over MQTT, with no IRIS backend in between:
+The console uses the robot phone for driving and a separate ESP8266 for the three appliance outputs. Both use the browser's shared MQTT WebSocket connection. Set `NEXT_PUBLIC_MQTT_BROKER_URL` **before building the web app** to the WebSocket listener for your broker. The default demo endpoint is `wss://broker.emqx.io:8084/mqtt`. Configure the phone and appliance board to use the corresponding broker. The footer's **Controls** chip shows connection status and offers **Reconnect**.
 
-- **Robot driving:** click regions of the robot's camera feed.
-- **Appliances:** three ON/OFF switches (pins `d1`–`d3`), from Gaze Connect's appliance board.
+## Drive from the phone camera
 
-Camera streaming, authentication and speech still use the IRIS backend as before.
+1. Open the console on HTTPS or localhost for camera access and Web Crypto. On the mounted phone, enable the robot controller and configure its MQTT settings and ESP password. Start IRIS. Sign in to the laptop console with the same authorized account and choose **Connect phone**. Wait for a live camera picture.
+2. On the phone, open **Session settings**, tap **Calibrate**, **Authorize**, then **Enable driving** once the robot is online.
+3. In the console, choose **Set up eye tracking**. Complete Screen 1 calibration and validation and choose **Use gaze in console**.
+4. Fixate on a labelled region of the phone video for 900 ms. Keep looking there to continue. The outer columns turn left and right. The middle column drives forward at the top, stops in the centre and reverses at the bottom. You can also press and hold a region with a pointer or focus it and hold Space or Enter.
+5. Look away, release the control, or select **Stop** to end the movement. If the console asks you to press Stop again, select the red **Stop** button to send a fresh signed stop. A stop disarms the phone. Tap **Enable driving** on the phone and make a new selection before the next movement.
 
----
+The waiting screen and the laptop-camera preview have no drive regions. Controls require recent robot frames, a connected phone and broker, a current grant, and a fresh `ready` status from the calibrated phone with its ESP online. During a hold the phone may report `driving`. The console stops renewing if gaze or feed is lost, the tab loses focus or is hidden, a modal opens, or the grant, connection or mobile status becomes unusable. It attempts a signed stop for an active hold. The phone's intention timeout also disarms it if updates stop arriving.
 
-## 1. One shared broker connection
+### Drive protocol
 
-| | |
-|---|---|
-| Broker | `wss://broker.emqx.io:8084/mqtt` (public EMQX, WebSocket + TLS) |
-| Library | `mqtt` 5.16.1, loaded in the browser with a dynamic `import()` |
-| Code | `apps/web/src/lib/mqtt/broker.ts`: a single `broker` instance, ref-counted (`broker.acquire()` on console mount) |
-| Publish | QoS 1, `retain: false`. `publish()` resolves on the broker's PUBACK, or rejects with a readable error (not connected / timeout / broker error) |
-| Reconnect | Automatic every 3 s. Subscriptions are restored after each reconnect |
-| Status | Footer chip **Controls · connected / connecting… / offline**. Click it for details and **Reconnect**. Connection errors also show a toast (once per distinct error) |
+| Path | Payload and delivery |
+| --- | --- |
+| Authenticated hub → browser | Private `drive_grant` with device, control session, 32-byte hex signing key, server epoch, lease expiry and maximum TTL. The key is held in memory. A matching `session_revoked` cancels the session. |
+| Browser → MQTT Topic 1 → phone | `teekhi-nazaar/esp12e_carbot/intent`, `type: "drive_intent"`, QoS 1, retain false. One intention on acceptance and fresh intentions about every 100 ms during the hold. |
+| Phone → MQTT Topic 1 → browser | Nonretained `type: "mobile_status"` for the same device and session. The console expires reports after 2.5 seconds. |
+| Phone → MQTT Topic 2 → robot ESP | The phone validates signatures, sequence and TTL, computes wheel effort and sends the password-bearing `lain-mobile` motor envelope to `carbot/command`. |
 
-> `mqtt`'s browser bundle imports `@babel/runtime` without declaring it, so `apps/web` lists `@babel/runtime` explicitly.
+Each intention names the device and control session, has a unique `command_id` and increasing integer `seq`, and uses `forward`, `backward`, `left`, `right` or `stop`. Speed uses a 0–100 scale. This console requests 35 for movement and 0 for stop. `sent_at` is an ISO 8601 UTC timestamp based on the server clock. `ttl_ms` is at most 300 ms and bounded by remaining lease time.
 
-## 2. Passwords
+For `signature`, join the following field **values** with a single LF between each, using decimal integers and the exact timestamp string. Compute HMAC-SHA256 over these UTF-8 bytes with the decoded signing key and encode the result as lowercase hex. There is no trailing LF.
 
-Both devices check a password **inside each message**. Neither is hardcoded:
-
-- Footer **Controls** chip, or the **Password** pill in Appliances → *Robot & appliance controls* dialog.
-- Saved in this browser only (`localStorage["iris.controlSettings"]`), never sent to the IRIS backend.
-- Trying to drive or switch without a password opens the dialog and explains why.
-
----
-
-## 3. Robot: click-to-drive
-
-Contract with the IoT engineer:
-
-```json
-// topic: carbot/command   QoS 1, retain=false
-{"password":"<robot password>","cmd":"S"}
+```text
+device_id
+control_session_id
+command_id
+seq
+action
+speed
+sent_at
+ttl_ms
 ```
 
-`cmd` is one of **`U` `D` `F` `B` `L` `R` `S`**. U/D are sent as-is; the firmware support is being added by the engineer, and they're **not** translated into servo commands.
+The phone enforces authorization and drive readiness locally. A broker PUBACK records broker delivery. Phone `last_command_id` records accepted input. See the [robot operating contract](robot-operation.md) for the phone's wheel translation and the firmware watchdog.
 
-### Regions (match the coloured guide lines)
+## Switch appliances
 
-```
-┌──────────┬────────────────────────────┬──────────┐
-│          │ U   0–15%                  │          │
-│          ├────────────────────────────┤          │
-│          │ F  15–30%                  │          │
-│          ├────────────────────────────┤          │
-│    L     │                            │    R     │
-│  outer   │ S  30–70%  (largest)       │  outer   │
-│  left    │                            │  right   │
-│  25%     ├────────────────────────────┤  25%     │
-│          │ B  70–85%                  │          │
-│          ├────────────────────────────┤          │
-│          │ D  85–100%                 │          │
-└──────────┴────────────────────────────┴──────────┘
-             middle 50% of the width
-```
+Choose **Appliances** and enter the dedicated appliance password via **Password** or the footer's **Controls** chip. This password is stored in this browser. The robot's motor password belongs on the mounted phone. Opening an existing console removes the old browser-stored robot password when storage is writable.
 
-- **One click = one command.** Hovering shows the letter and its name. The last command that reached the broker stays highlighted on its region.
-- **Only active while robot video is on screen:** either the WebRTC stream or the JPEG fallback. The green "Waiting for the robot's camera" screen has no regions, so clicking it does nothing.
-- **Never moves the robot:** the video pill and its audio button, the "Someone nearby said" caption, the status pill, the laptop-camera preview and the **Stop** button all sit above the regions (`z-20` over `z-10`).
-- **Stop:** the large middle **S** region, plus a red **Stop** button in the top-right corner of the feed.
+| Card | MQTT key | NodeMCU pin | GPIO |
+| --- | --- | --- | --- |
+| Appliance 1 | `d1` | D1 | 5 |
+| Appliance 2 | `d2` | D2 | 4 |
+| Appliance 3 | `d3` | D5 | 14 |
 
-### Safety stops (best effort)
+Wait for the board to report its state. Click a card or dwell on it to request the opposite state. The card shows the pending change until the board reports the requested output, or a timeout after five seconds. An incorrect password receives no confirmation.
 
-Plain `cmd` messages keep the motors running until the next command (docs/mqtt.md). So after any movement, IRIS publishes `S` without waiting for an acknowledgement when:
-- the robot video disappears (stream and fallback both gone);
-- the tab is hidden, the page is closed or navigated away (`pagehide`), or the console unmounts.
+| Topic | Direction | Example |
+| --- | --- | --- |
+| `gazeconnect/appliances/control` | Browser → board, QoS 1, retain false | `{"password":"<appliance password>","pins":{"d3":"on"}}` |
+| `gazeconnect/appliances/state` | Board → browser, retained | `{"d1":"off","d2":"off","d3":"on"}` |
 
-These sends are best effort: if the network is already gone, nothing can be sent. The red Stop button and the firmware's own safeguards remain the primary stop.
+The appliance password travels inside each MQTT command. Use an access-controlled broker/network for real devices. For the board firmware, provisioning and driver wiring, see the [appliance board guide](../iot/README.md).
 
-### Home card
+## Offline checks
 
-The old "Driving unavailable" card is now **Drive from the video**. Its hint shows what's missing: *Connect the robot phone first* · *Controls are connecting…* · *Set the robot password* · *Click a region · centre stops*. Selecting it opens the password dialog, or shows the region guide.
-
----
-
-## 4. Appliances
-
-The **Help** card and view were removed; **Appliances** replaces them. **Say something** is unchanged.
-
-Firmware contract (Gaze Connect `appliances_control_hardware`):
-
-```json
-// command → gazeconnect/appliances/control   QoS 1, retain=false
-{"password":"<appliance password>","pins":{"d3":"on"}}
-
-// state ← gazeconnect/appliances/state   (retained; sent after every accepted command and on connect)
-{"d0":"off","d1":"on","d2":"off", … ,"d8":"off"}
-```
-
-- **Three cards (`d1`–`d3`)**, the same big clay cards as every other screen. No paging. On = teal, off = light. Header pills: **Password** and **Back**. Works by click or gaze dwell.
-- **Toggle:** sends the opposite of the board's last reported state (unknown → `on`). The card shows **Turning on…/off…** until the state report confirms it.
-- **State:** taken from the retained state topic as soon as the console subscribes. Until the board has reported anything, cards say **State unknown**.
-- **Wrong password:** the board silently ignores the command. If the expected state doesn't arrive within **5 s**, the card shows **No reply. Check the password**.
-- **Publish failures** (broker offline, timeout) show a toast, and the card goes back to its previous state.
-
----
-
-## 5. Files
-
-| File | What it does |
-|---|---|
-| `apps/web/src/lib/mqtt/broker.ts` | Shared connection, status store, `publish` (QoS 1, PUBACK), `publishBestEffort`, `subscribe` |
-| `apps/web/src/lib/mqtt/settings.ts` | Robot / appliance passwords in `localStorage` |
-| `apps/web/src/lib/mqtt/robot.ts` | Command letters, labels, `sendRobotCommand`, `stopRobotBestEffort` |
-| `apps/web/src/lib/mqtt/appliances.ts` | `APPLIANCE_PINS` (`d1`–`d3`), `useAppliances()`: state subscription, toggle, pending / unconfirmed tracking |
-| `apps/web/src/components/console/robot-feed.tsx` | Click regions (`DriveRegions`), Stop button, overlays above the regions |
-| `apps/web/src/components/console/control-settings.tsx` | Password dialog and footer status chip |
-| `apps/web/src/components/console/console.tsx` | Wiring: broker lifetime, drive card, safety stops, Appliances view (three cards) |
-| `apps/web/src/components/console/use-dwell.ts` | Dwell won't fire for a card that appears under a pointer/gaze already resting there; it waits for the pointer to leave first (prevents switching an appliance by accident when opening the screen) |
-
----
-
-## 6. Verified (2026-11-04)
-
-Tested against the real broker, with a monitor subscribed over **MQTT/TCP 1883**, the same transport the ESP boards use. It used **dummy passwords**, so any real robot or board on the public broker ignored the test commands, and the simulated board replied with `retain: false` so it couldn't overwrite real retained state.
-
-| Check | Result |
-|---|---|
-| Browser connects to `wss://broker.emqx.io:8084/mqtt` | ✅ "Connected" |
-| L, R, U, F, S, B, D regions + Stop button | ✅ `{"password":"…","cmd":"L"}` … each with `qos=1 retain=false`, correct letter for every region |
-| Click without a robot password | ✅ dialog opens, nothing sent |
-| Click on the video pill (overlay) | ✅ nothing sent |
-| F, then leave the page | ✅ best-effort `S` arrived |
-| Clicks on the green waiting screen | ✅ nothing sent; Drive card shows "no video" |
-| Appliance toggles → simulated board reply | ✅ `{"password":"…","pins":{"d1":"on"}}`; the card shows On and the others Off, from the state report |
-| Wrong appliance password | ✅ sent, no reply → **No reply** + hint after 5 s |
-
-The regions were exercised through a **temporary dev-only test feed** (a test-pattern JPEG on the same `fallbackFrameUrl` path the robot phone uses). It was removed afterwards. Not yet tested: a real robot or appliance board, and U/D on the firmware.
+From the repository root, run `cd apps/web && bun test tests`. The drive publisher tests use an in-memory sink, fake clock and synthetic session. They exercise wire signatures, held commands, cancellation during signing, grant changes, replayed readiness after release, stale status and stalled heartbeats. Physical movement and appliance switching need separate device acceptance.

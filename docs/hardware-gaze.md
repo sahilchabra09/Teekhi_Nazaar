@@ -29,14 +29,12 @@ Build `bot/` using [the setup commands](firmware-setup.md#build). Never add pass
 
 Use a simulated MQTT receiver for frontend/backend work when hardware is unavailable. Direct plain wheel/direction commands exist for bench diagnostics, but they persist until changed and do not replace the mobile controller's timeout-enabled envelope. A published command is not evidence that the wheels moved.
 
-## Gaze module
+## Screen 1 in the patient console
 
-Provide the API in [shared interfaces](interfaces.md#browser-module-contracts): calibration, gaze points/confidence, tracking state, mouse fallback, shared camera stream, and cleanup. Large navigation zones and reply cards consume the same `data-gaze-target` dwell events.
+Open **Set up eye tracking** in the patient console on localhost or HTTPS. Select the head-mounted eye camera or its network video stream. The camera on the robot phone supplies the driving view. Frame the eye, build and lock the eye model, and optionally add a separate front camera for head compensation. Follow the nine screen calibration points and the accuracy check. **Use gaze in console** becomes available after a live camera calibration passes validation.
 
-Gaze selection starts a frontend intention state. Sahil's publisher owns the 100 ms heartbeat; the gaze module owns enter/leave/select/hold and reliable status changes. Lost or uncertain gaze must stop the active intention. The video center is a neutral area with no navigation action, and driving requires explicit enable.
+Hold your gaze on a card or video region until its dwell completes. Appliance cards send one on/off request per fixation. Look away and back to switch it again. The label follows the appliance board’s state report. Enter the appliance control password in the console settings. See the [appliance board setup](../iot/README.md) for the three output channels.
 
-Start with a validated gaze implementation and retain a mouse mode behind the same API. Smooth noise, prevent accidental target switching, and support recalibration after mount/user changes. Share the existing laptop camera stream with the media hook rather than opening it twice. Measure real selection accuracy, dwell behavior, and lost-tracking response under the demo lighting.
+The tracker maps camera measurements into normalized viewport coordinates and hit-tests visible console targets. Moving off a target, losing valid tracking, opening settings or hiding the page ends a hold. A screen resize requires calibration again. Choose **Gaze active · adjust** to return to the tracker, or **Close tracker** to release its cameras.
 
-## Integration checkpoints
-
-First agree board wiring, mount axes, and message contracts. Then provide firmware build/provisioning support and gaze mouse-mode events, integrate the phone's local controller, and validate calibrated gaze with supervised movement. Hand off measured gaze reliability and actual stop behavior for the demo. Obstacle avoidance is not an acceptance requirement of the current sensor-free firmware.
+Run `bun install` from the repository root before starting the website. The web dev and build commands prepare the local vision runtime. Eye detection and calibration run in browser workers. The [control guide](controls.md) covers robot and appliance settings.

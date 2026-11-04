@@ -124,7 +124,7 @@ uploadAudio(blob)
 - `useMockMode()` is a Jotai `atomWithStorage` saved in `localStorage` and synced across tabs. Its state is `{ mockEnabled, requiresCalibration }`.
 - `readCalibrationReady()` checks `testEyeTrackerStorage.readCalibrationRecord()` from `@workspace/ui`.
 - If there's no calibration, the page forces `mockEnabled: true`. Turning mock off without calibration opens the "Calibration required" modal, which links to `/setup?tab=calibration`.
-- **Talk Live itself never uses gaze.** It doesn't mount `useGazeCoreSetupWidget`. Its buttons carry a `data-gaze-activate` attribute, but **nothing in the frontend reads that attribute**. On this page the mock toggle only matters for the shared setting. Compare the home grid (`ModeGridScreen`): it shows a gaze cursor, picks a card with `elementFromPoint(...).closest("[data-mode-card-id]")`, and **selects with the Space key**.
+- **Talk Live itself never uses gaze.** Its buttons carry a `data-gaze-activate` attribute, but **nothing in the frontend reads that attribute**. On this page the mock toggle only matters for the shared setting. Compare the home grid (`ModeGridScreen`): it shows a gaze cursor, picks a card with `elementFromPoint(...).closest("[data-mode-card-id]")`, and **selects with the Space key**.
 
 ### 3.7 API client: `lib/talk-live/api.ts`
 

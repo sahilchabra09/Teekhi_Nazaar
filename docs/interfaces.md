@@ -2,7 +2,7 @@
 
 Movement uses MQTT: frontend/backend publish intentions on Topic 1, and the mounted phone uses gyro feedback to publish ESP wheel commands on Topic 2. Other application traffic uses WebSocket between frontend and backend, and between backend and phone. The backend relays conversation and media signalling; it does not relay movement over WebSocket or connect the ESP as a WebSocket peer.
 
-The detailed control contract is [robot operation](robot-operation.md); exact firmware fields and behavior are in [MQTT commands](mqtt.md). Application schemas described here are planned work. The firmware in `bot/` already implements its documented command/status interface.
+The detailed control contract is [robot operation](robot-operation.md); exact firmware fields and behavior are in [MQTT commands](mqtt.md). See [console controls](controls.md) for the implemented signed drive message, gaze dwell behavior and appliance topics. The firmware in `bot/` already implements its documented command/status interface.
 
 ## Connections and topics
 
@@ -13,7 +13,7 @@ The detailed control contract is [robot operation](robot-operation.md); exact fi
 | Frontend/backend → phone | MQTT Topic 1 | `drive_intent`; phone returns movement `mobile_status` on the same topic. |
 | Phone ↔ ESP8266 | MQTT command/status topics | Signed wheels and current ESP output. |
 
-The planned backend hub uses `/ws?role=web` for the frontend and `/ws?role=phone` for the phone. Local development may use `ws://localhost:3000/ws?role=web` in the laptop browser and the configured backend LAN address for the phone. Use authenticated `wss://` connections in deployment. Role query values identify routing intent, not identity or permissions; the server binds each connection to an authenticated device/session. These endpoints are a future backend task, not routes already implemented in the scaffold.
+The backend hub uses `/ws?role=web` for the frontend and `/ws?role=phone` for the phone. Local development may use `ws://localhost:3000/ws?role=web` in the laptop browser and the configured backend LAN address for the phone. Use authenticated `wss://` connections in deployment. Role query values identify routing intent, not identity or permissions; the server binds each connection to an authenticated device/session. The active owner’s authenticated peers receive the drive grant separately from MQTT.
 
 | Channel | Topic | Publishers and subscribers |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ The planned backend hub uses `/ws?role=web` for the frontend and `/ws?role=phone
 
 Current ESP broker: `broker.emqx.io:1883`. The frontend's MQTT client uses `wss://broker.emqx.io:8084/mqtt`, which is separate from its backend WebSocket connection. Movement messages follow MQTT publish/subscribe; other application messages follow the backend WebSocket routes. Protected deployments require a private authenticated broker, TLS on every connection, and topic permissions; see [password and transport security](robot-operation.md#password-process-and-protection-against-interception).
 
-WebSocket and gRPC are different protocols. This contract retains WebSocket for the two application links, matching the planned hub. Choosing gRPC later would require an agreed service schema and compatible server/browser/phone clients; it would not replace either movement MQTT topic. See the [WebSocket standard](https://www.rfc-editor.org/rfc/rfc6455) and [gRPC concepts](https://grpc.io/docs/what-is-grpc/core-concepts/).
+WebSocket and gRPC are different protocols. This contract retains WebSocket for the two application links, matching the application hub. Choosing gRPC later would require an agreed service schema and compatible server/browser/phone clients; it would not replace either movement MQTT topic. See the [WebSocket standard](https://www.rfc-editor.org/rfc/rfc6455) and [gRPC concepts](https://grpc.io/docs/what-is-grpc/core-concepts/).
 
 The backend coordinates one active controller per robot. Each subscriber filters by `type`, target `device_id`, active session, and relevant message ID. The `type` field routes application messages; it is not proof of sender identity. Unknown types and reflected status messages never enter the movement translator.
 
