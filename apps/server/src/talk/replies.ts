@@ -91,6 +91,8 @@ function buildPrompt({ patientName, heard, spoken, avoid }: { patientName: strin
     ...spoken.map((s) => `${patientName} (through IRIS) said: "${s}"`),
     `Someone near ${patientName} just said: "${heard}"`,
     "",
+    `Note: people come and go near the robot, and IRIS cannot tell voices apart. This may be a different person from earlier in this chat. If the line could be a greeting or a fresh start, reply to it on its own: do not bring up earlier topics, medicines or results unless this person asks about them.`,
+    "",
     `Write exactly ${REPLY_COUNT} replies ${patientName} could say back:`,
     "- First person, natural spoken language, at most 12 words each.",
     "- Clearly different from each other (when it fits: one yes/positive, one no/negative, one that asks or buys time).",

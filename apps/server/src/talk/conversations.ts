@@ -6,26 +6,47 @@ import { db } from "../services";
 /**
  * Conversation = one stretch of talking with someone near the robot.
  * All of its turns (and its AutoSage chat) stay together; once it ends, the next utterance opens
- * a new one. A conversation also ends by itself after 10 minutes of silence.
+ * a new one. It also ends after 90 s of silence, or when someone new starts talking (turn-taking.ts).
  */
 
 export type Conversation = typeof conversation.$inferSelect;
 export type Turn = { role: "heard" | "spoken"; text: string };
 
-const IDLE_MS = 10 * 60 * 1000;
+import { looksLikeOpener, OPENER_GAP_MS, SILENCE_MS } from "./turn-taking";
 
-/** The patient's open conversation with this id, or a brand-new one. */
-export async function openConversation(patientId: string, conversationId?: string | null): Promise<Conversation> {
+export { looksLikeOpener, OPENER_GAP_MS, SILENCE_MS };
+
+/** Why the returned conversation was picked. "silence"/"greeting" mean we switched away from an open one. */
+export type OpenReason = "continued" | "first" | "silence" | "greeting";
+
+/**
+ * The conversation this utterance belongs to: the open one, or a new one when it ended, went quiet
+ * for SILENCE_MS, or the new line sounds like a different person starting over.
+ */
+export async function openConversation(
+  patientId: string,
+  conversationId: string | null | undefined,
+  heard?: string,
+): Promise<{ conversation: Conversation; reason: OpenReason }> {
   if (conversationId) {
     const [existing] = await db
       .select()
       .from(conversation)
       .where(and(eq(conversation.id, conversationId), eq(conversation.patientId, patientId), isNull(conversation.endedAt)))
       .limit(1);
-    if (existing && Date.now() - existing.lastActivityAt.getTime() < IDLE_MS) return existing;
-    if (existing) await endConversation(patientId, existing.id);
+    if (existing) {
+      const quietFor = Date.now() - existing.lastActivityAt.getTime();
+      const reason: OpenReason | null =
+        quietFor >= SILENCE_MS ? "silence" : heard && quietFor >= OPENER_GAP_MS && looksLikeOpener(heard) ? "greeting" : null;
+      if (!reason) return { conversation: existing, reason: "continued" };
+      await endConversation(patientId, existing.id);
+      return { conversation: await createConversation(patientId), reason };
+    }
   }
+  return { conversation: await createConversation(patientId), reason: "first" };
+}
 
+async function createConversation(patientId: string) {
   const [created] = await db.insert(conversation).values({ id: crypto.randomUUID(), patientId }).returning();
   return created!;
 }

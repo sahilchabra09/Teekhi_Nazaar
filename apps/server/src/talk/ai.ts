@@ -93,6 +93,8 @@ Write exactly ${REPLY_COUNT} replies:
 - These are options, not facts: never claim medical facts, diagnoses, or medication details.
 - No emojis, no quotation marks, no numbering.
 
+People come and go near the robot and IRIS cannot tell voices apart: the latest line may be from a different person than the recent conversation. If it could be a greeting or a fresh start, reply to it on its own and don't bring up earlier topics.
+
 If what was heard is garbled, cut off, background noise, or makes no sense, set "unclear" to true and make the replies polite ways to ask them to repeat or clarify.`;
 
 function formatTurns(turns: Turn[]) {
