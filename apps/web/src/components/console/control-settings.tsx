@@ -26,7 +26,7 @@ export function ControlsChip({ onOpen }: { onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
-      title="Robot & appliance controls"
+      title="Appliance controls"
       className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium text-pine-soft hover:bg-white/60 hover:text-pine"
     >
       <span className={`size-2 shrink-0 rounded-full ${brokerDot(status)}`} />
@@ -35,20 +35,18 @@ export function ControlsChip({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-/** Passwords for the robot and the appliance board + MQTT status. Stored in this browser only. */
+/** Appliance credential and shared MQTT connection status. */
 export function ControlSettingsDialog({ open, onClose, reason }: { open: boolean; onClose: () => void; reason?: string | null }) {
   const saved = useControlSettings();
   const { status, error } = useBrokerStatus();
-  const [robotPassword, setRobotPassword] = useState("");
   const [appliancePassword, setAppliancePassword] = useState("");
   const [show, setShow] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setRobotPassword(saved.robotPassword);
     setAppliancePassword(saved.appliancePassword);
     setShow(false);
-  }, [open, saved.robotPassword, saved.appliancePassword]);
+  }, [open, saved.appliancePassword]);
 
   useEffect(() => {
     if (!open) return;
@@ -61,8 +59,8 @@ export function ControlSettingsDialog({ open, onClose, reason }: { open: boolean
 
   const save = (e: React.FormEvent) => {
     e.preventDefault();
-    saveControlSettings({ robotPassword, appliancePassword });
-    toast.success("Control passwords saved on this browser");
+    saveControlSettings({ appliancePassword });
+    toast.success("Appliance password saved on this browser");
     onClose();
   };
 
@@ -84,9 +82,9 @@ export function ControlSettingsDialog({ open, onClose, reason }: { open: boolean
           </span>
           <div className="min-w-0 flex-1">
             <h2 id="controls-title" className="font-display text-xl font-bold text-pine">
-              Robot & appliance controls
+              Appliance controls
             </h2>
-            <p className="text-sm text-pine-soft">Saved only in this browser and sent inside each command, as the devices expect.</p>
+            <p className="text-sm text-pine-soft">The appliance board checks this password. Configure robot driving on the paired phone.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="grid size-9 place-items-center rounded-full text-pine-soft hover:bg-mist">
             <X className="size-4" />
@@ -95,34 +93,21 @@ export function ControlSettingsDialog({ open, onClose, reason }: { open: boolean
 
         {reason && <p className="mt-4 rounded-xl bg-honey/20 px-3 py-2 text-sm font-medium text-pine">{reason}</p>}
 
-        <label className="mt-5 block">
-          <span className="mb-1.5 block text-[13px] font-semibold text-pine">Robot password</span>
+        <label className="mt-4 block">
+          <span className="mb-1.5 block text-[13px] font-semibold text-pine">Appliance password</span>
           <div className="relative">
             <input
               type={show ? "text" : "password"}
-              value={robotPassword}
-              onChange={(e) => setRobotPassword(e.target.value)}
-              placeholder="Control password set on the robot"
+              value={appliancePassword}
+              onChange={(e) => setAppliancePassword(e.target.value)}
+              placeholder="Control password set on the appliance board"
               autoComplete="off"
               className={field}
             />
-            <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Hide passwords" : "Show passwords"} className="absolute top-1/2 right-2 grid size-8 -translate-y-1/2 place-items-center rounded-full text-pine-soft hover:bg-mist">
+            <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Hide appliance password" : "Show appliance password"} className="absolute top-1/2 right-2 grid size-8 -translate-y-1/2 place-items-center rounded-full text-pine-soft hover:bg-mist">
               {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
-          <span className="mt-1 block text-xs text-pine-soft">Sent to carbot/command when you click the robot video.</span>
-        </label>
-
-        <label className="mt-4 block">
-          <span className="mb-1.5 block text-[13px] font-semibold text-pine">Appliance password</span>
-          <input
-            type={show ? "text" : "password"}
-            value={appliancePassword}
-            onChange={(e) => setAppliancePassword(e.target.value)}
-            placeholder="Control password set on the appliance board"
-            autoComplete="off"
-            className={field}
-          />
           <span className="mt-1 block text-xs text-pine-soft">Sent to gazeconnect/appliances/control. A wrong password is ignored by the board.</span>
         </label>
 

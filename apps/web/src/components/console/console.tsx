@@ -2,7 +2,7 @@
 
 import { Ear, Lightbulb, LightbulbOff, Loader2, LogOut, MessageSquareText, Navigation, Square, TriangleAlert, Volume2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { IrisMark } from "@/components/iris/logo";
@@ -10,7 +10,7 @@ import { runAuthAction } from "@/lib/auth-actions";
 import { authClient } from "@/lib/auth-client";
 import { APPLIANCE_PINS, type AppliancePin, useAppliances } from "@/lib/mqtt/appliances";
 import { broker, useBrokerStatus } from "@/lib/mqtt/broker";
-import { type RobotCommand, sendRobotCommand, stopRobotBestEffort } from "@/lib/mqtt/robot";
+import { DRIVE_INTERVAL_MS, DRIVE_TOPIC, DrivePublisher, type DriveAction, type DriveSource, type Direction } from "@/lib/mqtt/robot";
 import { useControlSettings } from "@/lib/mqtt/settings";
 import { conversationReducer, initialConversation } from "@/lib/robot/conversation";
 import type { ConsoleView as View, ReplySource } from "@/lib/robot/conversation";
@@ -52,7 +52,7 @@ export default function Console({ userName }: { userName: string }) {
 
   useEffect(() => setMicId(readSavedMic()), []);
 
-  // ───────────────────── direct browser MQTT: robot driving + appliances (docs/controls.md) ─────────────────────
+  // ───────────────────── MQTT: phone intentions and appliance commands (docs/controls.md) ─────────────────────
 
   useEffect(() => broker.acquire(), []); // one shared connection for both features
   const brokerState = useBrokerStatus();
@@ -69,62 +69,67 @@ export default function Console({ userName }: { userName: string }) {
     lastBrokerError.current = message;
   }, [brokerState.status, brokerState.error]);
 
-  const hasFeed = Boolean(connection.media.remote || connection.media.fallbackFrameUrl);
-  const [lastCommand, setLastCommand] = useState<RobotCommand | null>(null);
-  const [sendingCommand, setSendingCommand] = useState<RobotCommand | null>(null);
-  const moved = useRef(false); // a movement command was sent and no stop since
-  const robotPassword = useRef(controls.robotPassword);
-  useEffect(() => {
-    robotPassword.current = controls.robotPassword;
-  }, [controls.robotPassword]);
+  const hasFeed = Boolean((connection.media.state === "live" && connection.media.remote) ||
+    (connection.media.state === "fallback" && connection.media.fallbackFrameUrl));
+  const connected = connection.status === "connected" && connection.phone;
+  const available = useRef(false);
+  const frameAt = useRef(-Infinity);
+  const [driver] = useState(() => new DrivePublisher(
+    intent => broker.publish(DRIVE_TOPIC, intent),
+    () => available.current && performance.now() - frameAt.current < 1500 &&
+      broker.getSnapshot().status === "connected" && document.visibilityState === "visible" &&
+      !document.querySelector('dialog[open], [aria-modal="true"]'),
+  ));
+  const [driveStatus, setDriveStatus] = useState<"ready" | "retry-stop" | "waiting">("waiting");
+  const ready = driveStatus === "ready";
+  const [active, setActive] = useState<Direction | null>(null);
+  const frame = useCallback(() => { frameAt.current = performance.now(); }, []);
+  const lostFeed = useCallback(() => { frameAt.current = -Infinity; void driver.stop(); }, [driver]);
+  const start = useCallback((action: Direction, source: DriveSource) => { void driver.start(action, source); }, [driver]);
+  const release = useCallback((action: DriveAction, source?: DriveSource) => { void driver.release(action, source); }, [driver]);
+  const stop = useCallback((explicit = false) => { void driver.stop(explicit); }, [driver]);
 
-  const drive = useCallback(
-    async (cmd: RobotCommand) => {
-      if (!controls.robotPassword) {
-        if (cmd === "S") stopRobotBestEffort(robotPassword.current);
-        return openSettings("Enter the robot password to drive from the video.");
-      }
-      setSendingCommand(cmd);
-      try {
-        await sendRobotCommand(cmd, controls.robotPassword);
-        setLastCommand(cmd);
-        moved.current = cmd !== "S";
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Couldn’t send the drive command.");
-      } finally {
-        setSendingCommand(null);
-      }
-    },
-    [controls.robotPassword, openSettings],
-  );
+  useLayoutEffect(() => {
+    available.current = connected && hasFeed && !settings.open && !signingOut;
+    if (!available.current) void driver.stop();
+    if (!connected) driver.revoke();
+    if (!hasFeed) frameAt.current = -Infinity;
+  }, [driver, connected, hasFeed, settings.open, signingOut]);
 
-  // Best-effort stop when the robot video disappears…
-  const hadFeed = useRef(hasFeed);
   useEffect(() => {
-    if (hadFeed.current && !hasFeed) {
-      if (moved.current) stopRobotBestEffort(robotPassword.current);
-      moved.current = false;
-      setLastCommand(null);
-    }
-    hadFeed.current = hasFeed;
-  }, [hasFeed]);
+    const hub = connection.hub;
+    if (!hub) return;
+    const listeners = [
+      hub.on("drive_grant", m => driver.grant(m)),
+      hub.on("session_revoked", m => { if (m.device_id === "esp12e_carbot") driver.revoke(m.control_session_id); }),
+      hub.on("peer_status", m => { if (m.phone === false) driver.revoke(); }),
+      hub.on("stop", () => stop()),
+      broker.subscribe(DRIVE_TOPIC, (raw, retained) => driver.mobileStatus(raw, retained)),
+      broker.subscribeStore(() => { if (broker.getSnapshot().status !== "connected") driver.revoke(); }),
+    ];
+    return () => { listeners.forEach(unsubscribe => unsubscribe()); driver.revoke(); };
+  }, [connection.hub, driver, stop]);
 
-  // …and when the user leaves the control screen (tab hidden, page closed, console unmounted).
   useEffect(() => {
-    const stop = () => {
-      if (!moved.current) return;
-      stopRobotBestEffort(robotPassword.current);
-      moved.current = false;
+    const tick = () => {
+      void driver.tick();
+      setActive(driver.active);
+      setDriveStatus(driver.ready ? "ready" : driver.stopNeedsRetry ? "retry-stop" : "waiting");
     };
-    const onVisibility = () => document.visibilityState === "hidden" && stop();
-    window.addEventListener("pagehide", stop);
-    document.addEventListener("visibilitychange", onVisibility);
+    const timer = setInterval(tick, DRIVE_INTERVAL_MS);
+    const leave = () => stop();
+    const visibility = () => { if (document.hidden) leave(); };
+    window.addEventListener("blur", leave);
+    window.addEventListener("pagehide", leave);
+    document.addEventListener("visibilitychange", visibility);
     return () => {
-      window.removeEventListener("pagehide", stop);
-      document.removeEventListener("visibilitychange", onVisibility);
-      stop();
+      clearInterval(timer);
+      window.removeEventListener("blur", leave);
+      window.removeEventListener("pagehide", leave);
+      document.removeEventListener("visibilitychange", visibility);
+      leave();
     };
-  }, []);
+  }, [driver, stop]);
 
   const toggleAppliance = useCallback(
     async (pin: AppliancePin) => {
@@ -343,23 +348,13 @@ export default function Console({ userName }: { userName: string }) {
           kind: "action",
           key: "drive",
           title: hasFeed ? "Drive from the video" : "Driving: no video",
-          hint: !hasFeed
-            ? "Connect the robot phone first"
-            : brokerState.status !== "connected"
-              ? "Controls are connecting…"
-              : !controls.robotPassword
-                ? "Set the robot password"
-                : "Click a region · centre stops",
+          hint: !hasFeed ? "Connect the robot phone first" : active ? "Driving · look away to stop" :
+            driveStatus === "retry-stop" ? "Press Stop again to confirm" : ready ? "Hold a direction · look away to stop" : "Calibrate and enable drive on the phone",
           icon: Navigation,
-          tone: hasFeed && brokerState.status === "connected" && controls.robotPassword ? "teal" : "plain",
-          onSelect: () =>
-            !controls.robotPassword
-              ? openSettings("Enter the robot password to drive from the video.")
-              : toast(
-                  hasFeed
-                    ? "Click the video: L/R turn, F/B forward and back, U/D up and down, the big middle area stops. The red Stop button stops too."
-                    : "Driving works once the robot’s camera is on screen.",
-                ),
+          tone: ready || active ? "teal" : "plain",
+          onSelect: () => toast(driveStatus === "retry-stop" ? "Select the red Stop button, then enable driving on the phone." : ready || active
+            ? "Look at a direction for 0.9 seconds or press and hold. Let go or look away to stop."
+            : "Connect the phone camera, fetch a drive session, calibrate, and enable driving on the phone."),
         },
         {
           kind: "action",
@@ -517,7 +512,7 @@ export default function Console({ userName }: { userName: string }) {
             localCamera={connection.camera}
             fallbackFrameUrl={connection.media.fallbackFrameUrl}
             mediaState={connection.media.state}
-            drive={{ lastCommand: sendingCommand ?? lastCommand, sending: sendingCommand !== null, onCommand: (cmd) => void drive(cmd) }}
+            drive={{ enabled: ready || active !== null, active, start, release, stop, frame, lostFeed }}
             heard={heard}
             heardLabel={view.name === "suggestions" && view.lowConfidence ? "I think they said" : "Someone nearby said"}
             status={feedStatus}

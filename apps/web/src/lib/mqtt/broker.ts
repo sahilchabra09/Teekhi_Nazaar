@@ -5,14 +5,12 @@ import { useSyncExternalStore } from "react";
 
 /**
  * ONE browser MQTT connection for the console, shared by robot driving and appliance control
- * (docs/controls.md). Commands go straight from the browser to the broker over WebSockets;
- * nothing is routed through the IRIS backend.
+ * (docs/controls.md). The phone consumes drive intentions and owns motor output.
  */
 
-export const BROKER_URL = "wss://broker.emqx.io:8084/mqtt";
+export const BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "wss://broker.emqx.io:8084/mqtt";
 
 export const TOPICS = {
-  robotCommand: "carbot/command",
   applianceControl: "gazeconnect/appliances/control",
   applianceState: "gazeconnect/appliances/state",
 } as const;
@@ -20,7 +18,7 @@ export const TOPICS = {
 export type BrokerStatus = "idle" | "connecting" | "connected" | "reconnecting" | "offline" | "error";
 export type BrokerSnapshot = { status: BrokerStatus; error: string | null };
 
-type Handler = (payload: string) => void;
+type Handler = (payload: string, retained: boolean) => void;
 
 const PUBLISH_TIMEOUT_MS = 8_000;
 
@@ -88,9 +86,9 @@ class Broker {
         client.on("reconnect", () => this.set({ status: "reconnecting" }));
         client.on("offline", () => this.set({ status: "offline", error: this.snapshot.error ?? "The control broker is unreachable." }));
         client.on("error", (error) => this.set({ status: "error", error: `Control broker error: ${error.message}` }));
-        client.on("message", (topic, payload) => {
+        client.on("message", (topic, payload, packet) => {
           const text = payload.toString();
-          for (const h of this.handlers.get(topic) ?? []) h(text);
+          for (const h of this.handlers.get(topic) ?? []) h(text, packet.retain === true);
         });
       } catch (error) {
         this.client = null;
@@ -146,14 +144,6 @@ class Broker {
     });
   }
 
-  /** Fire-and-forget publish for page exit / safety stops, where nobody can wait for an ack. */
-  publishBestEffort(topic: string, message: unknown) {
-    try {
-      if (this.client?.connected) this.client.publish(topic, JSON.stringify(message), { qos: 1, retain: false });
-    } catch {
-      /* best effort */
-    }
-  }
 }
 
 export const broker = new Broker();

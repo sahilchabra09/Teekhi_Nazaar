@@ -4,16 +4,17 @@ import { Octagon, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { IrisMark } from "@/components/iris/logo";
-import { COMMAND_LABEL, type RobotCommand } from "@/lib/mqtt/robot";
+import type { DriveAction, Direction, DriveSource } from "@/lib/mqtt/robot";
 import type { RobotStream } from "@/lib/rtc";
 
-/** Click-to-drive on the robot video (docs/controls.md). */
 export type DriveControls = {
-  /** Last command that reached the broker, highlighted on its region. */
-  lastCommand: RobotCommand | null;
-  /** A command is on its way to the broker. */
-  sending: boolean;
-  onCommand: (cmd: RobotCommand) => void;
+  enabled: boolean;
+  active: Direction | null;
+  start: (action: Direction, source: DriveSource) => void;
+  release: (action: DriveAction, source?: DriveSource) => void;
+  stop: (explicit?: boolean) => void;
+  frame: () => void;
+  lostFeed: () => void;
 };
 
 type Props = {
@@ -67,6 +68,28 @@ export function RobotFeed({
     }
   }, [localCamera]);
 
+  const frame = drive?.frame;
+  const lostFeed = drive?.lostFeed;
+  useEffect(() => () => { lostFeed?.(); }, [stream, mediaState, lostFeed]);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!stream || !video || !frame || mediaState !== "live") return;
+    let token = 0;
+    const seen = () => {
+      if (video.videoWidth && !video.paused && stream.getVideoTracks().some(t => t.readyState === "live" && !t.muted)) frame();
+    };
+    if (typeof video.requestVideoFrameCallback === "function") {
+      const next = () => { seen(); token = video.requestVideoFrameCallback(next); };
+      token = video.requestVideoFrameCallback(next);
+    } else {
+      video.addEventListener("timeupdate", seen);
+    }
+    return () => {
+      if (token) video.cancelVideoFrameCallback(token);
+      video.removeEventListener("timeupdate", seen);
+    };
+  }, [stream, mediaState, frame]);
+
   return (
     <div className="relative h-full overflow-hidden rounded-[1.5rem] bg-pine shadow-[0_10px_30px_-12px_rgb(18_56_50/0.45)]">
         <video
@@ -74,11 +97,14 @@ export function RobotFeed({
           autoPlay
           playsInline
           muted={muted}
+          onEnded={() => lostFeed?.()}
+          onError={() => lostFeed?.()}
+          onPause={() => lostFeed?.()}
           aria-label="Live robot camera"
           className={stream && !fallbackFrameUrl ? "size-full object-cover" : "hidden"}
           style={mirrored ? { transform: "scaleX(-1)" } : undefined}
         />
-      {fallbackFrameUrl && <img src={fallbackFrameUrl} alt="Live robot camera, JPEG fallback" className="size-full object-cover" />}
+      {fallbackFrameUrl && <img src={fallbackFrameUrl} onLoad={frame} onError={lostFeed} alt="Live robot camera, JPEG fallback" className="size-full object-cover" />}
       {!stream && !fallbackFrameUrl && <EmptyFeed onPreviewWebcam={onPreviewWebcam} mediaState={mediaState} />}
 
       <GuideLines />
@@ -99,7 +125,7 @@ export function RobotFeed({
       {hasFeed && drive && (
         <button
           type="button"
-          onClick={() => drive.onCommand("S")}
+          onClick={() => drive.stop(true)}
           aria-label="Stop the robot"
           className="absolute top-3 right-3 z-20 flex items-center gap-1.5 rounded-full bg-tomato px-4 py-2 text-sm font-bold text-white shadow-[0_8px_20px_-6px_rgb(228_85_63/0.7)] transition-transform hover:scale-105 active:scale-95"
         >
@@ -131,22 +157,13 @@ export function RobotFeed({
   );
 }
 
-/**
- * Guide grid on the feed:
- * - 2 vertical lines → left 25% | middle 50% (widest) | right 25%
- * - 4 horizontal lines inside the middle column → 5 rows; the centre row is tallest (40%),
- *   the other four are equal (15% each).
- * Every line has its own colour.
- */
 const V_LINES = [
   { left: "25%", color: "#f4b23e" }, // honey
   { left: "75%", color: "#8ec5dd" }, // sky
 ];
 const H_LINES = [
-  { top: "15%", color: "#e4553f" }, // tomato
   { top: "30%", color: "#9bd56a" }, // lime
   { top: "70%", color: "#ff8fb1" }, // pink
-  { top: "85%", color: "#3fd1b8" }, // aqua
 ];
 
 function GuideLines() {
@@ -178,52 +195,79 @@ function GuideLines() {
   );
 }
 
-/**
- * Click regions, matching the guide lines:
- *   outer left 25% = L · outer right 25% = R
- *   middle 50%: 0–15% U · 15–30% F · 30–70% S (biggest, easy to hit) · 70–85% B · 85–100% D
- */
-const REGIONS: { cmd: RobotCommand; style: React.CSSProperties }[] = [
-  { cmd: "L", style: { left: 0, top: 0, width: "25%", height: "100%" } },
-  { cmd: "R", style: { left: "75%", top: 0, width: "25%", height: "100%" } },
-  { cmd: "U", style: { left: "25%", top: 0, width: "50%", height: "15%" } },
-  { cmd: "F", style: { left: "25%", top: "15%", width: "50%", height: "15%" } },
-  { cmd: "S", style: { left: "25%", top: "30%", width: "50%", height: "40%" } },
-  { cmd: "B", style: { left: "25%", top: "70%", width: "50%", height: "15%" } },
-  { cmd: "D", style: { left: "25%", top: "85%", width: "50%", height: "15%" } },
+const REGIONS: { action: DriveAction; label: string; style: React.CSSProperties }[] = [
+  { action: "left", label: "Turn left", style: { left: 0, top: 0, width: "25%", height: "100%" } },
+  { action: "right", label: "Turn right", style: { left: "75%", top: 0, width: "25%", height: "100%" } },
+  { action: "forward", label: "Forward", style: { left: "25%", top: 0, width: "50%", height: "30%" } },
+  { action: "stop", label: "Stop", style: { left: "25%", top: "30%", width: "50%", height: "40%" } },
+  { action: "backward", label: "Back", style: { left: "25%", top: "70%", width: "50%", height: "30%" } },
 ];
 
 function DriveRegions({ drive }: { drive: DriveControls }) {
-  return (
-    <div className="absolute inset-0 z-10" aria-label="Robot drive controls">
-      {REGIONS.map(({ cmd, style }) => {
-        const active = drive.lastCommand === cmd;
-        const isStop = cmd === "S";
-        return (
-          <button
-            key={cmd}
-            type="button"
-            onClick={() => drive.onCommand(cmd)}
-            aria-label={`${COMMAND_LABEL[cmd]} (${cmd})`}
-            title={`${COMMAND_LABEL[cmd]} (${cmd})`}
-            style={style}
-            className={`group absolute grid cursor-pointer place-items-center outline-none transition-colors focus-visible:bg-white/15 ${
-              active ? (isStop ? "bg-tomato/20" : "bg-honey/20") : "hover:bg-white/10"
-            }`}
-          >
-            <span
-              className={`rounded-full px-3 py-1 font-display text-lg font-extrabold text-white transition-opacity ${
-                active ? (isStop ? "bg-tomato/80 opacity-100" : "bg-honey/80 text-pine opacity-100") : "bg-pine/60 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
-              }`}
-            >
-              {cmd} · {COMMAND_LABEL[cmd]}
-              {active && drive.sending ? "…" : ""}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
+  return <div className="absolute inset-0 z-10" aria-label="Robot drive controls">
+    {REGIONS.map(region => <DriveRegion key={region.action} {...region} drive={drive} />)}
+  </div>;
+}
+
+function DriveRegion({ action, label, style, drive }: (typeof REGIONS)[number] & { drive: DriveControls }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [looking, setLooking] = useState(false);
+  const { start, release, stop, enabled } = drive;
+  const isStop = action === "stop";
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const enter = () => setLooking(true);
+    const select = () => {
+      if (isStop) { stop(true); return; }
+      start(action, "gaze");
+    };
+    const leave = () => {
+      setLooking(false);
+      release(action, "gaze");
+    };
+    el.addEventListener("gaze:enter", enter);
+    el.addEventListener("gaze:select", select);
+    el.addEventListener("gaze:leave", leave);
+    return () => {
+      el.removeEventListener("gaze:enter", enter);
+      el.removeEventListener("gaze:select", select);
+      el.removeEventListener("gaze:leave", leave);
+      release(action);
+    };
+  }, [action, isStop, start, release, stop]);
+
+  return <button ref={ref} type="button" data-gaze-target="" data-gaze-dwell="900"
+    disabled={!isStop && !enabled}
+    aria-label={isStop ? "Stop driving" : `Hold to drive: ${label}`}
+    onClick={isStop ? () => stop(true) : undefined}
+    onPointerDown={e => {
+      if (isStop || !e.isPrimary || e.button !== 0) return;
+      start(action, "pointer");
+    }}
+    onPointerMove={e => {
+      if (!e.isPrimary || !(e.buttons & 1)) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX >= r.right || e.clientY < r.top || e.clientY >= r.bottom) release(action, "pointer");
+    }}
+    onPointerUp={() => release(action, "pointer")} onPointerCancel={() => release(action, "pointer")}
+    onPointerLeave={() => release(action, "pointer")} onLostPointerCapture={() => release(action, "pointer")}
+    onKeyDown={e => {
+      if (isStop || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      if (!e.repeat) start(action, "keyboard");
+    }}
+    onKeyUp={e => { if (e.key === "Enter" || e.key === " ") release(action, "keyboard"); }}
+    onBlur={() => release(action, "keyboard")}
+    style={style}
+    className={`absolute grid touch-none select-none place-items-center transition-colors focus-visible:bg-white/15 disabled:opacity-50 ${
+      drive.active === action ? "bg-honey/20" : looking ? "bg-white/15" : "enabled:hover:bg-white/10"
+    }`}>
+    <span className={`rounded-full px-3 py-1 font-display text-base font-bold text-white ${
+      drive.active === action ? "bg-teal" : isStop ? "bg-tomato/80" : "bg-pine/65"
+    }`}>{label}</span>
+  </button>;
 }
 
 function EmptyFeed({ onPreviewWebcam, mediaState }: { onPreviewWebcam: () => void; mediaState: RobotStream["state"] }) {

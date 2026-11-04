@@ -2,15 +2,12 @@
 
 import { useSyncExternalStore } from "react";
 
-/**
- * Control passwords, kept only in this browser (localStorage). They go inside each MQTT payload,
- * exactly as the firmware expects; they are never sent to the IRIS backend.
- */
+/** Only the appliance board password is saved by this browser. */
 
-export type ControlSettings = { robotPassword: string; appliancePassword: string };
+export type ControlSettings = { appliancePassword: string };
 
 const KEY = "iris.controlSettings";
-const EMPTY: ControlSettings = { robotPassword: "", appliancePassword: "" };
+const EMPTY: ControlSettings = { appliancePassword: "" };
 
 let current: ControlSettings = EMPTY;
 let loaded = false;
@@ -24,9 +21,10 @@ function load() {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<ControlSettings>;
       current = {
-        robotPassword: typeof parsed.robotPassword === "string" ? parsed.robotPassword : "",
         appliancePassword: typeof parsed.appliancePassword === "string" ? parsed.appliancePassword : "",
       };
+      // Remove the obsolete motor credential from older installations.
+      if ("robotPassword" in parsed) localStorage.setItem(KEY, JSON.stringify(current));
     }
   } catch {
     /* storage blocked: keep in memory for this session */
@@ -39,7 +37,7 @@ export function getControlSettings() {
 }
 
 export function saveControlSettings(next: ControlSettings) {
-  current = { robotPassword: next.robotPassword.trim(), appliancePassword: next.appliancePassword.trim() };
+  current = { appliancePassword: next.appliancePassword.trim() };
   try {
     localStorage.setItem(KEY, JSON.stringify(current));
   } catch {
