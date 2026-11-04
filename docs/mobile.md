@@ -47,7 +47,7 @@ Use Kotlin and platform facilities for permissions, calibrated motion sensors, c
 
 WebRTC carries live camera/microphone streams, with `media_ready`, `rtc_offer`, `rtc_answer`, and `rtc_ice` relayed by the backend WebSocket hub. The phone creates the offer; the browser media hook uses the same authenticated hub adapter. Create a fresh media session after reconnect. Share microphone samples between streaming and VAD where possible; avoid opening competing microphone captures.
 
-Phone speech starts only after the signed-in patient approves a request in **Communicate → Listen and reply**. The phone can end its approved turn with **Stop microphone**, and choosing **Drive** cancels the turn. The phone plays confirmed replies and reports TTS completion. See the [current speech workflow](./speech-workflow.md).
+The person at the phone taps **Request conversation**. The paired patient opens one continuous voice-and-message call by selecting **Answer call** in the action cards. **End call** or **Drive** closes that call. See the [speech workflow](./speech-workflow.md).
 
 Accept `speak` only from the authorized session, deduplicate by `speak_id`, show a caption, speak on the robot loudspeaker, and publish matching `tts_status`. Suggestions alone never trigger speech. Verify volume, echo handling, permissions, battery use, and lifecycle behavior on a real mounted phone.
 

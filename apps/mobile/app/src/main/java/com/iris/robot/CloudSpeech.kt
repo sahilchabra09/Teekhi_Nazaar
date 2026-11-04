@@ -15,28 +15,30 @@ import java.util.concurrent.TimeUnit
 /** A socket belongs to one approved turn. A lost socket ends that turn. */
 class CloudSpeech(
     private val address: HubAddress, private val token: String, private val scope: CoroutineScope,
-    private val state: (SpeechState) -> Unit, private val error: (String) -> Unit, private val unauthorized: () -> Unit,
+    private val state: (SpeechState) -> Unit, private val failure: (String, String) -> Unit, private val unauthorized: () -> Unit,
 ) : AutoCloseable {
     private val http = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).callTimeout(90, TimeUnit.SECONDS).build()
     private var socket: WebSocket? = null
     private var upload: Call? = null
     private var activeId: String? = null
     private var capturing = false
+    private var callId: String? = null
 
     private fun command(action: String, id: String) =
-        JSONObject().put("action", action).put("request_id", id).toString()
+        JSONObject().put("action", action).put("request_id", id).put("call_id", callId).toString()
 
-    @Synchronized fun start(id: String) {
+    @Synchronized fun start(callId: String, id: String) {
         if (activeId != null) return
+        this.callId = callId
         activeId = id
         capturing = true
-        val url = address.http.replaceFirst("http", "ws") + "/api/mobile/speech"
+        val url = address.http.replaceFirst("http", "ws") + "/api/mobile/speech?call_id=$callId&request_id=$id"
         socket = http.newWebSocket(Request.Builder().url(url).header("Authorization", "Bearer $token").build(), object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 when (val message = Protocol.decode(text)) {
-                    is SpeechState -> if (message.request_id == id) {
+                    is SpeechState -> if (message.call_id == callId && message.request_id == id) {
                         synchronized(this@CloudSpeech) {
-                            if (activeId == id && message.state in setOf("processing", "ready", "failed", "no_speech")) capturing = false
+                            if (activeId == id && message.state in setOf("processing", "ready", "failed", "no_speech", "paused")) capturing = false
                         }
                         scope.launch { if (activeId == id) state(message) }
                     }
@@ -49,7 +51,7 @@ class CloudSpeech(
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(code, null)
-                failed(id, "Speech connection ended")
+                if (code != 1000) failed(id, "Speech connection ended")
             }
         }).also { it.send(command("start", id)) }
     }
@@ -71,11 +73,11 @@ class CloudSpeech(
     }
 
     /** Android recognition posts a transcript once, under the same approved request ID. */
-    @Synchronized fun transcript(id: String, text: String, confidence: Double?) {
+    @Synchronized fun transcript(callId: String, id: String, text: String, confidence: Double?) {
         if (activeId != null) return
         activeId = id
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("utterance_id", id).addFormDataPart("text", text)
+            .addFormDataPart("call_id", callId).addFormDataPart("utterance_id", id).addFormDataPart("text", text)
             .addFormDataPart("confidence", (confidence ?: -1.0).toString()).build()
         val call = http.newCall(Request.Builder().url(address.http + "/api/utterance")
             .header("Authorization", "Bearer $token").post(body).build())
@@ -94,15 +96,14 @@ class CloudSpeech(
     private fun failed(id: String, message: String, expired: Boolean = false) {
         scope.launch {
             if (activeId != id) return@launch
-            error(message)
-            state(SpeechState("failed", id))
-            if (expired) unauthorized()
+            if (expired) unauthorized() else failure(id, message)
         }
     }
 
     @Synchronized fun end(id: String) {
         if (activeId != id) return
         activeId = null
+        callId = null
         capturing = false
         socket?.cancel(); socket = null
         upload?.cancel(); upload = null

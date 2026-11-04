@@ -2,19 +2,18 @@ package com.iris.robot
 
 import android.annotation.SuppressLint
 import android.media.*
-import android.os.SystemClock
 import com.iris.robot.core.PcmResampler
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
-/** Receives PCM from the call or a standalone recorder only for the approved capture window. */
+/** Receives PCM from the call or a standalone recorder only for the current approved utterance. */
 class Listener(
     private val cloud: CloudSpeech,
     private val failed: (String, String) -> Unit,
 ) : AutoCloseable {
-    private class Capture(val id: String, val deadline: Long) {
+    private class Capture(val id: String) {
         val resampler = PcmResampler()
         val pending = ByteArrayOutputStream()
     }
@@ -48,7 +47,7 @@ class Listener(
         }
     }
 
-    private fun current(turn: Capture) = capture === turn && SystemClock.elapsedRealtime() < turn.deadline
+    private fun current(turn: Capture) = capture === turn
 
     private fun enqueue(turn: Capture, bytes: ByteArray, count: Int, rate: Int, channels: Int) {
         if (current(turn) && samples.trySend(Samples(turn, bytes.copyOf(count), rate, channels)).isFailure)
@@ -60,10 +59,10 @@ class Listener(
         if (!standalone) enqueue(turn, bytes, bytes.size, rate, channels)
     }
 
-    @Synchronized fun start(id: String, deadline: Long) {
+    @Synchronized fun start(callId: String, id: String) {
         if (capture != null) return
-        cloud.start(id)
-        val turn = Capture(id, deadline)
+        cloud.start(callId, id)
+        val turn = Capture(id)
         capture = turn
         if (standalone) openRecorder(turn)
     }

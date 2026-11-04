@@ -168,8 +168,10 @@ private class RobotSession(
     private var closed = false
     private var speaking = false
     private var androidStt = false
-    private val turn = ListenTurn()
-    private var turnTimer: Job? = null
+    private val call = ListenCall()
+    private var pendingAnswer: Job? = null
+    private var nextUtterance: Job? = null
+    private var retryDelay = 750L
     private var dashboard = false
     private lateinit var cloud: CloudSpeech
     private var sttReady = true
@@ -190,11 +192,11 @@ private class RobotSession(
         hub = HubClient(address, scope, { connected, label ->
             controller.backendConnectivity(connected)
             change { it.copy(hub = connected, hubLabel = label) }
-            if (!connected) { dashboard = false; cancelTurn(); sessions?.bind(null); mqtt?.stopOutput(); rtc.peerAvailable(false); change { it.copy(web = false) } }
+            if (!connected) { dashboard = false; endCall(); sessions?.bind(null); mqtt?.stopOutput(); rtc.peerAvailable(false); change { it.copy(web = false) } }
         }, ::message, settings.accountToken) { credentialRejected, message ->
             if (credentialRejected) unauthorized() else endSession(message)
         }
-        cloud = CloudSpeech(address, settings.accountToken, scope, ::speechState, ::error, unauthorized)
+        cloud = CloudSpeech(address, settings.accountToken, scope, ::speechState, ::speechFailed, unauthorized)
         listener = Listener(cloud) { id, reason -> scope.launch { speechFailed(id, reason) } }
         recognizer = AndroidRecognizer(context, ::processing, ::transcript, ::speechFailed)
         rtc = RtcClient(context, listener, hub::send, { value -> change { it.copy(video = value) } },
@@ -202,11 +204,12 @@ private class RobotSession(
             { live -> change { it.copy(frontendVideoLive = live) } }, ::error)
         speaker = Speaker(context, address, settings.accountToken, hub::send, {
             speaking = true
-            cancelTurn(notify = true)
+            pauseUtterance()
             change { it.copy(speaking = true) }
         }, {
             speaking = false
             change { it.copy(speaking = false) }
+            scheduleNext(500)
         }, { text, active -> change { it.copy(caption = text, speaking = active) } })
         motion = Motion(context, hub::send, controller::updatePose, { kind ->
             controller.fault("Robot $kind; enable required", loseCalibration = kind == "tilt")
@@ -230,7 +233,7 @@ private class RobotSession(
         when (msg) {
             is PeerStatus -> {
                 dashboard = msg.web
-                if (!msg.web) { cancelTurn(); endDrivePair() }
+                if (!msg.web) { endCall(); endDrivePair() }
                 rtc.peerAvailable(msg.web); change { it.copy(web = msg.web) }
             }
             is DriveBinding -> if (msg.device_id == controller.deviceId) sessions?.bind(msg.binding)
@@ -238,7 +241,8 @@ private class RobotSession(
                 (msg.control_session_id == null || controller.sessionId == null || msg.control_session_id == controller.sessionId)) {
                 rtc.requestOffer()
             }
-            is Speak -> speaker.speak(msg)
+            is Speak -> if (call.accepts(msg)) speaker.speak(msg)
+                else hub.send(TtsStatus(msg.speak_id, "error", "Conversation ended"))
             is Listen -> listen(msg)
             is SpeechState -> speechState(msg)
             is RtcAnswer, is RtcIce -> rtc.accept(msg)
@@ -255,125 +259,163 @@ private class RobotSession(
             mqtt?.stopOutput()
         }
     }
-    private fun refreshTurn(label: String) {
-        change { it.copy(listenPhase = turn.phase, listening = label) }
+    private fun showCall(label: String) {
+        change { it.copy(listenPhase = call.phase, listening = label) }
     }
 
-    private fun armTimer(id: String) {
-        turnTimer?.cancel()
-        turnTimer = scope.launch {
-            delay((turn.deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0))
-            if (turn.id != id) return@launch
-            if (turn.phase == ListenPhase.CAPTURING) stopCapture(id, notify = true)
-            else cancelTurn(notify = true, label = "Microphone request expired")
-        }
-    }
+    private fun control(action: String, id: String, callId: String): Boolean =
+        hub.send(Listen(action, id, System.currentTimeMillis(), call_id = callId, continuous = true))
 
-    private fun cancelTurn(notify: Boolean = false, label: String = "Ready") {
-        val id = turn.id ?: return
-        turn.clear(id)
+    private fun endCall(notify: Boolean = false, label: String = "Ready") {
+        val callId = call.id ?: return
+        val utterance = call.utterance
+        call.end(callId)
+        pendingAnswer?.cancel()
+        nextUtterance?.cancel()
         rtc.approveMicrophone(false)
-        turnTimer?.cancel()
-        listener.end(id)
+        utterance?.let(listener::end)
         recognizer.close()
-        if (notify) hub.send(Listen("cancel", id, System.currentTimeMillis()))
-        refreshTurn(label)
+        speaker.cancelCall(callId)
+        if (notify) control("cancel", callId, callId)
+        showCall(label)
     }
 
     private fun listen(msg: Listen) {
+        val callId = call.id ?: return
         val id = msg.request_id
-        if (turn.id != id) return
+        if (msg.action == "cancel" && id == callId && (msg.call_id == null || msg.call_id == callId)) {
+            endCall(label = if (call.approved) "Call ended" else "Conversation request ended")
+            return
+        }
+        if (msg.action == "start" && id == callId && call.phase == ListenPhase.PENDING &&
+            (msg.continuous != true || msg.call_id == null)) {
+            endCall(notify = true, label = "Both devices need the updated conversation feature")
+            return
+        }
+        if (msg.call_id != callId || msg.continuous != true || call.utterance != id) return
         when (msg.action) {
-            "cancel" -> cancelTurn(label = "Microphone request ended")
-            "stop" -> stopCapture(id)
             "start" -> {
-                val now = SystemClock.elapsedRealtime()
-                if (turn.phase != ListenPhase.PENDING) return
-                if (!dashboard || !sttReady || speaking || !turn.approve(id, now)) {
-                    cancelTurn(notify = true)
-                    return
-                }
-                refreshTurn("Microphone on")
-                armTimer(id)
-                if (androidStt) recognizer.start(id) else {
-                    rtc.approveMicrophone(true)
-                    listener.start(id, turn.deadline)
-                }
+                if (!dashboard || !call.start(callId, id, SystemClock.elapsedRealtime())) return
+                pendingAnswer?.cancel()
+                nextUtterance?.cancel()
+                if (speaking || !sttReady) { pauseUtterance(); return }
+                showCall("Call active · listening")
+                rtc.approveMicrophone(!androidStt)
+                if (androidStt) recognizer.start(id) else listener.start(callId, id)
+            }
+            "stop" -> if (call.processing(id)) {
+                if (androidStt) recognizer.stop(id) else listener.stop(id)
+                showCall("Call active · processing speech")
             }
         }
     }
 
-    private fun stopCapture(id: String, notify: Boolean = false) {
-        if (!turn.finishCapture(id)) return
+    private fun pauseUtterance() {
+        nextUtterance?.cancel()
         rtc.approveMicrophone(false)
-        if (notify) hub.send(Listen("stop", id, System.currentTimeMillis()))
-        if (androidStt) recognizer.stop(id) else listener.stop(id)
-        refreshTurn("Finishing speech")
-        armTimer(id)
+        if (!call.approved) return
+        val callId = call.id ?: return
+        val id = call.utterance
+        if (id != null) {
+            // Pause the exact in-flight turn even when its start acknowledgement is on the wire.
+            control("pause", id, callId)
+            call.retire(id)
+            listener.end(id)
+            recognizer.close()
+        }
+        showCall("Call active · microphone paused")
+    }
+
+    private fun scheduleNext(wait: Long) {
+        nextUtterance?.cancel()
+        if (speaking || !sttReady || call.phase != ListenPhase.CONNECTED) return
+        val callId = call.id ?: return
+        showCall("Call active · preparing microphone")
+        nextUtterance = scope.launch {
+            delay(wait)
+            if (call.id != callId || speaking || !sttReady) return@launch
+            val id = java.util.UUID.randomUUID().toString()
+            if (!call.next(id)) return@launch
+            rtc.approveMicrophone(!androidStt)
+            while (call.id == callId && call.utterance == id && call.phase == ListenPhase.STARTING) {
+                if (!control("next", id, callId)) { endCall(label = "Dashboard unavailable"); return@launch }
+                delay(5000) // Idempotently retransmit until this utterance is acknowledged.
+            }
+        }
     }
 
     private fun processing(id: String) {
-        if (!turn.finishCapture(id)) return
-        rtc.approveMicrophone(false)
+        if (!call.processing(id)) return
         if (!androidStt) listener.stop(id)
-        refreshTurn("Processing speech")
-        armTimer(id)
+        showCall("Call active · processing speech")
     }
 
     private fun speechState(msg: SpeechState) {
-        if (turn.id != msg.request_id) return
+        if (msg.call_id != call.id || call.utterance != msg.request_id || !call.approved) return
         when (msg.state) {
             "processing" -> processing(msg.request_id)
-            "ready" -> cancelTurn(label = "Finished")
-            "failed" -> cancelTurn(notify = true, label = "Speech request failed")
-            "no_speech" -> cancelTurn(label = "No speech detected")
+            "ready", "no_speech", "paused", "failed" -> finishUtterance(msg.request_id, msg.state == "failed")
         }
+    }
+
+    private fun finishUtterance(id: String, failed: Boolean = false) {
+        if (!call.retire(id)) return
+        listener.end(id)
+        recognizer.close()
+        val wait = if (failed) retryDelay else 150L
+        retryDelay = if (failed) (retryDelay * 2).coerceAtMost(15_000) else 750L
+        scheduleNext(wait)
     }
 
     private fun speechFailed(id: String, reason: String) {
-        if (turn.id != id) return
+        val callId = call.id ?: return
+        if (!call.approved || call.utterance != id) return
         error(reason)
-        hub.send(SpeechState("failed", id))
-        cancelTurn(notify = true, label = "Speech request failed")
+        hub.send(SpeechState("failed", id, call_id = callId))
+        control("pause", id, callId)
+        finishUtterance(id, failed = true)
     }
 
     private fun transcript(id: String, text: String, confidence: Double?) {
-        if (turn.id != id || turn.phase !in setOf(ListenPhase.CAPTURING, ListenPhase.FINISHING)) return
+        val callId = call.id ?: return
+        if (call.utterance != id || call.phase !in setOf(ListenPhase.CAPTURING, ListenPhase.PROCESSING) || speaking) return
         processing(id)
-        if (SystemClock.elapsedRealtime() >= turn.deadline) { cancelTurn(notify = true); return }
         if (text.isEmpty()) {
-            hub.send(SpeechState("no_speech", id))
-            cancelTurn(label = "No speech detected")
+            hub.send(SpeechState("no_speech", id, call_id = callId))
+            finishUtterance(id)
             return
         }
-        hub.send(SpeechState("processing", id))
-        cloud.transcript(id, text, confidence)
+        hub.send(SpeechState("processing", id, call_id = callId))
+        cloud.transcript(callId, id, text, confidence)
     }
 
     fun modes(forceJpeg: Boolean, recognize: Boolean) {
         if (speaking || !sttReady) return
-        cancelTurn(notify = true)
-        androidStt = recognize
         sttReady = false
+        pauseUtterance()
+        androidStt = recognize
         change { it.copy(jpeg = forceJpeg, androidStt = recognize, sttReady = false) }
         rtc.setModes(forceJpeg, recognize) {
-            scope.launch { if (!closed) { sttReady = true; change { it.copy(sttReady = true) } } }
+            scope.launch {
+                if (closed) return@launch
+                sttReady = true
+                change { it.copy(sttReady = true) }
+                scheduleNext(150)
+            }
         }
     }
 
     fun tap() {
-        if (!dashboard || speaking || !sttReady) return
-        when (turn.phase) {
-            ListenPhase.IDLE -> {
-                val id = java.util.UUID.randomUUID().toString()
-                turn.request(id, SystemClock.elapsedRealtime())
-                if (hub.send(Listen("request", id, System.currentTimeMillis()))) {
-                    refreshTurn("Waiting for patient approval")
-                    armTimer(id)
-                } else cancelTurn(label = "Dashboard unavailable")
-            }
-            ListenPhase.CAPTURING -> turn.id?.let { stopCapture(it, notify = true) }
-            else -> Unit
+        if (!dashboard || speaking || !sttReady || call.phase != ListenPhase.IDLE) return
+        val callId = java.util.UUID.randomUUID().toString()
+        if (!call.request(callId, SystemClock.elapsedRealtime())) return
+        retryDelay = 750
+        if (!control("request", callId, callId)) { endCall(label = "Dashboard unavailable"); return }
+        showCall("Waiting for the patient to answer")
+        pendingAnswer = scope.launch {
+            delay((call.answerDeadline - SystemClock.elapsedRealtime()).coerceAtLeast(0))
+            if (call.id == callId && call.phase == ListenPhase.PENDING)
+                endCall(notify = true, label = "Conversation request expired")
         }
     }
     fun calibrate() {
@@ -386,7 +428,7 @@ private class RobotSession(
     fun stopRobot() { mqtt?.stop("Operator stopped"); hub.send(Stop("user")) }
     override fun close() {
         if (closed) return
-        cancelTurn(notify = true)
+        endCall(notify = true)
         closed = true
         sessions?.close(); mqtt?.close()
         if (::motion.isInitialized) motion.close()

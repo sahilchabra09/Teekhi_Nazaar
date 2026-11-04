@@ -19,7 +19,7 @@ data class Hello(val role: String = "phone", val version: Int = 1, override val 
 @Serializable @SerialName("peer_status")
 data class PeerStatus(val web: Boolean, val phone: Boolean, val robot: Boolean, override val ts: Long) : Msg
 @Serializable @SerialName("speak")
-data class Speak(val speak_id: String, val text: String, val source: String, val audio_url: String? = null, override val ts: Long) : Msg
+data class Speak(val speak_id: String, val text: String, val source: String, val audio_url: String? = null, override val ts: Long, val call_id: String? = null) : Msg
 @Serializable @SerialName("tts_status")
 data class TtsStatus(val speak_id: String, val state: String, val error: String? = null, override val ts: Long = System.currentTimeMillis()) : Msg
 @Serializable @SerialName("speech_activity")
@@ -27,9 +27,9 @@ data class SpeechActivity(val active: Boolean, override val ts: Long = System.cu
 @Serializable @SerialName("transcript")
 data class Transcript(val utterance_id: String, val text: String, val confidence: Double? = null, override val ts: Long = System.currentTimeMillis()) : Msg
 @Serializable @SerialName("listen")
-data class Listen(val action: String, val request_id: String, override val ts: Long) : Msg
+data class Listen(val action: String, val request_id: String, override val ts: Long, val call_id: String? = null, val continuous: Boolean? = null) : Msg
 @Serializable @SerialName("speech_state")
-data class SpeechState(val state: String, val request_id: String, override val ts: Long = System.currentTimeMillis()) : Msg
+data class SpeechState(val state: String, val request_id: String, override val ts: Long = System.currentTimeMillis(), val call_id: String? = null) : Msg
 @Serializable @SerialName("motion")
 data class MotionMessage(val alpha: Double, val beta: Double, val gamma: Double, val accel: Double, override val ts: Long = System.currentTimeMillis()) : Msg
 @Serializable @SerialName("bump")

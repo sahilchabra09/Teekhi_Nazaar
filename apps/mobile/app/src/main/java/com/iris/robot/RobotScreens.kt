@@ -90,7 +90,7 @@ import androidx.compose.ui.viewinterop.AndroidView
                     }
                     IrisSymbol(Symbol.Chevron, Modifier.size(18.dp), Clay.Soft)
                 }
-                if (signedIn) Text("The camera turns on when the session starts. The microphone turns on only when the patient approves a request.", style = MaterialTheme.typography.bodySmall,
+                if (signedIn) Text("The camera turns on when the session starts. The patient answers your conversation request to turn on the microphone.", style = MaterialTheme.typography.bodySmall,
                     color = Clay.Soft, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 12.dp))
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -219,29 +219,21 @@ import androidx.compose.ui.viewinterop.AndroidView
             state.speaking -> "IRIS is speaking"
             !state.sttReady -> "Preparing microphone"
             !state.hub || !state.web -> "Connect the patient dashboard to communicate"
-            phase == ListenPhase.CAPTURING -> "Microphone on · up to 30 seconds"
-            phase == ListenPhase.IDLE && state.listening == "Ready" -> "Ask the patient to turn on this microphone"
+            phase == ListenPhase.IDLE && state.listening == "Ready" -> "Request a conversation with the patient"
             else -> state.listening
         }
         Text(label, style = MaterialTheme.typography.labelMedium, color = Clay.Teal)
         if (state.caption.isNotBlank()) Text(state.caption, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        if (phase == ListenPhase.CAPTURING) {
-            ClayButton(onClick = microphone, tone = Clay.Tomato, modifier = Modifier.fillMaxWidth()) {
-                IrisSymbol(Symbol.Power, Modifier.size(20.dp), Color.White)
-                Spacer(Modifier.width(8.dp))
-                Text("Stop microphone")
-            }
-        } else {
+        if (phase == ListenPhase.IDLE || phase == ListenPhase.PENDING) {
             ClayButton(onClick = microphone, modifier = Modifier.fillMaxWidth(),
                 enabled = state.hub && state.web && state.sttReady && !state.speaking && phase == ListenPhase.IDLE) {
                 IrisSymbol(Symbol.Mic, Modifier.size(20.dp), LocalContentColor.current)
                 Spacer(Modifier.width(8.dp))
-                Text(when (phase) {
-                    ListenPhase.PENDING -> "Approval requested"
-                    ListenPhase.FINISHING -> "Finishing speech"
-                    else -> "Request microphone"
-                })
+                Text(if (phase == ListenPhase.PENDING) "Waiting for answer" else "Request conversation")
             }
+        } else {
+            StatusPill("Call active", live = true)
+            Text("The patient can end this call from their dashboard.", style = MaterialTheme.typography.bodySmall, color = Clay.Soft)
         }
         if (state.error != null) TextButton(onClick = openSettings) { Text("View session notice", color = Clay.Tomato) }
     }
