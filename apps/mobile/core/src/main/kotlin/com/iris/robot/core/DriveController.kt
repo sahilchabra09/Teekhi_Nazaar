@@ -1,5 +1,8 @@
 package com.iris.robot.core
 
+import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import kotlin.math.roundToInt
 
 data class Pose(val heading: Double, val pitch: Double, val roll: Double, val yawRate: Double, val atMs: Long)
@@ -19,6 +22,7 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
     var lastCommandId: String? = null; private set
     private var espAt = Long.MIN_VALUE
     private var grant: SessionGrant? = null
+    private var intentMac: Mac? = null
     private var grantAt = 0L
     private var grantExpires = 0L
     private var clockUpperBound = 0L
@@ -51,14 +55,15 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
     }
     fun grant(value: SessionGrant, receivedAt: Long, roundTripMs: Long): Boolean {
         if (value.device_id != deviceId || value.control_session_id.isBlank() ||
-            value.max_ttl_ms !in 1..300 || roundTripMs !in 0..2000 ||
+            !HEX_256.matches(value.signing_key) || value.max_ttl_ms !in 1..300 || roundTripMs !in 0..2000 ||
             value.expires_at_ms <= value.server_time_ms + roundTripMs ||
             value.expires_at_ms - value.server_time_ms > 60_000) {
             revoke("Invalid session grant or clock uncertainty")
             return false
         }
-        if (value.control_session_id != sessionId) revoke("Session changed; enable explicitly")
+        if (value.control_session_id != sessionId || grant?.signing_key != value.signing_key) revoke("Session changed; enable explicitly")
         else if (grant != null && receivedAt >= grantExpires) disarm("Session lease expired; enable explicitly")
+        intentMac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(decodeHex(value.signing_key), "HmacSHA256")) }
         grant = value
         sessionId = value.control_session_id
         grantAt = receivedAt
@@ -68,7 +73,7 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
         return true
     }
     fun revoke(why: String) {
-        disarm(why); grant = null; sessionId = null; sequence = -1; commandIds.clear()
+        disarm(why); grant = null; intentMac = null; sessionId = null; sequence = -1; commandIds.clear()
     }
     fun active(value: Boolean) {
         foreground = value
@@ -103,10 +108,11 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
         val age = trustedNow - sentAt
         if (retained || value.type != "drive_intent" || value.device_id != deviceId ||
             value.control_session_id != sessionId || value.command_id.isBlank() || value.command_id.length > 128 ||
+            '\n' in value.command_id || '\r' in value.command_id ||
             value.seq < 0 || value.seq <= sequence || value.command_id in commandIds ||
             value.action !in setOf("forward", "backward", "left", "right", "stop") ||
             value.speed !in 0..100 || value.ttl_ms !in 1..g.max_ttl_ms ||
-            age < 0 || age >= value.ttl_ms || now >= grantExpires) return false
+            age < 0 || age >= value.ttl_ms || now >= grantExpires || !hasValidSignature(value)) return false
         sequence = value.seq
         commandIds.add(value.command_id)
         if (commandIds.size > 256) commandIds.remove(commandIds.first())
@@ -118,6 +124,13 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
         intentExpires = now + (value.ttl_ms - age.coerceAtLeast(0))
         tick(now)
         return true
+    }
+    private fun hasValidSignature(value: DriveIntent): Boolean {
+        val mac = intentMac ?: return false
+        if (!HEX_256.matches(value.signature)) return false
+        val canonical = listOf(value.device_id, value.control_session_id, value.command_id, value.seq,
+            value.action, value.speed, value.sent_at, value.ttl_ms).joinToString("\n")
+        return MessageDigest.isEqual(mac.doFinal(canonical.toByteArray(Charsets.UTF_8)), decodeHex(value.signature))
     }
     fun tick(now: Long): DriveOutput {
         if (!enabled) return output
@@ -153,5 +166,9 @@ class DriveController(val deviceId: String = "esp12e_carbot") {
         calibrated = calibrated, heading_deg = pose?.heading ?: 0.0, target_heading_deg = targetHeading,
         left = output.left, right = output.right,
     )
-    companion object { fun angle(value: Double): Double = ((value + 180) % 360 + 360) % 360 - 180 }
+    companion object {
+        private val HEX_256 = Regex("[0-9a-f]{64}")
+        private fun decodeHex(value: String) = ByteArray(value.length / 2) { i -> value.substring(2 * i, 2 * i + 2).toInt(16).toByte() }
+        fun angle(value: Double): Double = ((value + 180) % 360 + 360) % 360 - 180
+    }
 }

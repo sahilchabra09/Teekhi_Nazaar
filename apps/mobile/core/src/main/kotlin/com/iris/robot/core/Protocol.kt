@@ -15,7 +15,7 @@ object Protocol {
 
 @Serializable sealed interface Msg { val ts: Long }
 @Serializable @SerialName("hello")
-data class Hello(val role: String = "phone", val version: Int = 1, override val ts: Long = System.currentTimeMillis()) : Msg
+data class Hello(val role: String = "phone", val version: Int = 1, override val ts: Long = System.currentTimeMillis(), val drive_proof: String = "hmac-sha256-v1") : Msg
 @Serializable @SerialName("peer_status")
 data class PeerStatus(val web: Boolean, val phone: Boolean, val robot: Boolean, override val ts: Long) : Msg
 @Serializable @SerialName("speak")
@@ -75,6 +75,7 @@ data class HubAddress(val http: String, val websocket: String) {
     val speed: Int,
     val sent_at: String,
     val ttl_ms: Int,
+    val signature: String = "",
 ) {
     fun sentAtMs(): Long? = runCatching { Instant.parse(sent_at).toEpochMilli() }.getOrNull()
 }
@@ -86,7 +87,10 @@ data class HubAddress(val http: String, val websocket: String) {
     val server_time_ms: Long,
     val expires_at_ms: Long,
     val max_ttl_ms: Int = 300,
+    val signing_key: String,
 )
+@Serializable @SerialName("drive_binding")
+data class DriveBinding(val device_id: String, val binding: String, override val ts: Long) : Msg
 @Serializable @SerialName("session_revoked")
 data class SessionRevoked(val device_id: String, val control_session_id: String, override val ts: Long) : Msg
 

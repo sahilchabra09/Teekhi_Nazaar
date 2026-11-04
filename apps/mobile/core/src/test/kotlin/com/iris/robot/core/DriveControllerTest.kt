@@ -1,17 +1,43 @@
 package com.iris.robot.core
 
 import java.time.Instant
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import kotlin.test.*
 
 class DriveControllerTest {
+    private val key = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    private fun DriveIntent.signed(): DriveIntent {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(ByteArray(32) { it.toByte() }, "HmacSHA256"))
+        val payload = "$device_id\n$control_session_id\n$command_id\n$seq\n$action\n$speed\n$sent_at\n$ttl_ms"
+        return copy(signature = mac.doFinal(payload.toByteArray()).joinToString("") { "%02x".format(it) })
+    }
     private val epoch = 1_700_000_000_000L
     private fun ready(): DriveController = DriveController().apply {
         connectivity(true); backendConnectivity(true); updatePose(Pose(0.0, 0.0, 0.0, 0.0, 1000)); assertTrue(calibrate(1000)); espSeen(1000)
-        assertTrue(grant(SessionGrant(deviceId, "session-a", epoch, epoch + 10000), 1000, 20)); assertTrue(enable(1000))
+        assertTrue(grant(SessionGrant(deviceId, "session-a", epoch, epoch + 10000, signing_key = key), 1000, 20)); assertTrue(enable(1000))
     }
     private fun intent(seq: Long = 1, action: String = "forward", sent: Long = epoch) = DriveIntent(
         "drive_intent", "esp12e_carbot", "session-a", "cmd-$seq", seq, action, 40, Instant.ofEpochMilli(sent).toString(), 300,
-    )
+    ).signed()
+    @Test fun `signed grants reject missing proof and altered fields without advancing sequence`() {
+        val c = ready()
+        val value = Protocol.json.decodeFromString<SessionGrant>("""{"device_id":"esp12e_carbot","control_session_id":"session-a","server_time_ms":$epoch,"expires_at_ms":${epoch + 10000},"signing_key":"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"}""")
+        assertTrue(c.grant(value, 1000, 20))
+        assertTrue(c.enable(1000))
+        val proof = "8be3265ae93fff846cb5aad35b5f53296f29afaefb76673b0b67c88ff3078fa9"
+        val signed = Protocol.json.decodeFromString<DriveIntent>("""{"type":"drive_intent","device_id":"esp12e_carbot","control_session_id":"session-a","command_id":"cmd-1","seq":1,"action":"forward","speed":40,"sent_at":"2023-11-14T22:13:20Z","ttl_ms":300,"signature":"$proof"}""")
+        assertFalse(c.accept(signed.copy(signature = proof.uppercase()), false, 1000))
+        assertFalse(c.accept(signed.copy(speed = 60), false, 1000))
+        assertFalse(c.accept(signed.copy(action = "stop"), false, 1000))
+        assertFalse(c.accept(intent(seq = 500).copy(signature = ""), false, 1000))
+        assertTrue(c.accept(signed, false, 1000))
+        assertFalse(c.accept(signed, false, 1000))
+        assertFalse(c.grant(value.copy(signing_key = ""), 1001, 0))
+        assertEquals(DriveOutput(), c.output)
+        assertNull(c.sessionId)
+    }
     @Test fun `startup and reconnect require grant calibration status and explicit enable`() {
         val c = DriveController()
         assertFalse(c.enable(1000)); assertEquals(DriveOutput(), c.tick(1000))
@@ -29,11 +55,11 @@ class DriveControllerTest {
     @Test fun `retained misaddressed wrong-session expired future and excessive-TTL movement are rejected`() {
         val c = ready()
         assertFalse(c.accept(intent(), true, 1000))
-        assertFalse(c.accept(intent().copy(device_id = "other"), false, 1000))
-        assertFalse(c.accept(intent().copy(control_session_id = "unknown"), false, 1000))
+        assertFalse(c.accept(intent().copy(device_id = "other").signed(), false, 1000))
+        assertFalse(c.accept(intent().copy(control_session_id = "unknown").signed(), false, 1000))
         assertFalse(c.accept(intent(sent = epoch - 301), false, 1000))
         assertFalse(c.accept(intent(sent = epoch + 51), false, 1000))
-        assertFalse(c.accept(intent().copy(ttl_ms = 301), false, 1000))
+        assertFalse(c.accept(intent().copy(ttl_ms = 301).signed(), false, 1000))
         assertFalse(c.accept(intent().copy(type = "mobile_status"), false, 1000))
         assertEquals(DriveOutput(), c.output)
     }
@@ -54,7 +80,7 @@ class DriveControllerTest {
         assertEquals(80.0, c.targetHeading)
     }
     @Test fun `stop zero speed background and sensor loss disarm without gyro creep`() {
-        for (stop in listOf(intent(2, "stop"), intent(2).copy(speed = 0))) {
+        for (stop in listOf(intent(2, "stop"), intent(2).copy(speed = 0).signed())) {
             val c = ready(); c.accept(intent(), false, 1000); assertTrue(c.accept(stop, false, 1000))
             assertEquals(DriveOutput(), c.tick(1000)); assertFalse(c.enabled)
             assertFalse(c.accept(intent(3), false, 1000))
@@ -66,9 +92,9 @@ class DriveControllerTest {
     }
     @Test fun `session replacement and invalid grant disarm immediately`() {
         val c = ready(); c.accept(intent(), false, 1000)
-        assertTrue(c.grant(SessionGrant(c.deviceId, "session-b", epoch + 100, epoch + 10000), 1100, 20))
+        assertTrue(c.grant(SessionGrant(c.deviceId, "session-b", epoch + 100, epoch + 10000, signing_key = key), 1100, 20))
         assertFalse(c.enabled); assertEquals(DriveOutput(), c.output)
-        assertFalse(c.grant(SessionGrant("other", "session-c", epoch, epoch + 10000), 1100, 0))
+        assertFalse(c.grant(SessionGrant("other", "session-c", epoch, epoch + 10000, signing_key = key), 1100, 0))
         assertNull(c.sessionId)
     }
     @Test fun `full ESP status and grant lease expire independently`() {
@@ -80,16 +106,16 @@ class DriveControllerTest {
     @Test fun `angle wrap takes the shortest path and output is bounded`() {
         assertEquals(2.0, DriveController.angle(-358.0))
         assertEquals(-2.0, DriveController.angle(358.0))
-        val c = ready(); c.accept(intent().copy(speed = 100), false, 1000)
+        val c = ready(); c.accept(intent().copy(speed = 100).signed(), false, 1000)
         c.updatePose(Pose(-150.0, 0.0, 0.0, 0.0, 1100)); c.tick(1100)
         assertTrue(c.output.left in -100..100); assertTrue(c.output.right in -100..100)
     }
     @Test fun `network clock uncertainty shortens TTL and an expired renewed lease needs enable`() {
         val c = ready()
-        c.grant(SessionGrant(c.deviceId, "session-a", epoch, epoch + 10000), 1000, 200)
+        c.grant(SessionGrant(c.deviceId, "session-a", epoch, epoch + 10000, signing_key = key), 1000, 200)
         assertFalse(c.accept(intent(sent = epoch - 200), false, 1000))
         c.updatePose(Pose(0.0, 0.0, 0.0, 0.0, 11000)); c.espSeen(11000)
-        assertTrue(c.grant(SessionGrant(c.deviceId, "session-a", epoch + 10000, epoch + 20000), 11000, 20))
+        assertTrue(c.grant(SessionGrant(c.deviceId, "session-a", epoch + 10000, epoch + 20000, signing_key = key), 11000, 20))
         assertFalse(c.enabled)
     }
     @Test fun `backend WebSocket loss disarms even when MQTT is healthy`() {
