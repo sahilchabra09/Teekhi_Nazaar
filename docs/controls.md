@@ -38,6 +38,12 @@ ttl_ms
 
 The phone enforces authorization and drive readiness locally. A broker PUBACK records broker delivery. Phone `last_command_id` records accepted input. See the [robot operating contract](robot-operation.md) for the phone's wheel translation and the firmware watchdog.
 
+## Navigate by gaze
+
+**Communicate** stays in the middle of the action panel. Select it to open the communication choices. Look away and select it again to return to the main actions. **Quick phrases** works the same way. It opens three phrase cards below the video, and selecting **Quick phrases** again closes them. Choosing a phrase opens a confirmation before anyone hears it.
+
+In **Drive**, select **Drive** again to leave driving. **Stop driving** remains a separate action. During eye setup, select an available numbered step to revisit it.
+
 ## Switch appliances
 
 Choose **Appliances** to switch either of the two outputs below. Select the highlighted **Back to actions** card to return to the main menu. The signed-in console gets the configured appliance password from the web server automatically. The mounted phone keeps the robot's driving password separately.

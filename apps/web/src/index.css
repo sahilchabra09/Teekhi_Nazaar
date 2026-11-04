@@ -222,7 +222,25 @@
   flex: 1;
   min-height: 0;
   gap: clamp(0.65rem, 1.25vw, 1.25rem);
-  grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr);
+  grid-template-columns: minmax(0, 1.55fr) minmax(16rem, 1fr);
+}
+.patient-media { display: flex; min-height: 0; min-width: 0; flex-direction: column; }
+.patient-media > section { flex: 1; }
+.patient-options {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  flex: 0 0 clamp(6rem, 22dvh, 15rem);
+  gap: .65rem;
+  margin-top: .75rem;
+}
+.patient-action-card[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 3px solid var(--pine);
+  border-radius: inherit;
+  pointer-events: none;
 }
 .patient-tool, .patient-video-tool {
   position: relative;
@@ -242,13 +260,15 @@
 .patient-card-icon { width: clamp(2.5rem, 6vh, 4rem); aspect-ratio: 1; }
 @media (max-width: 700px) and (orientation: portrait) {
   .patient-console { min-height: 36rem; }
-  .patient-stage { grid-template-columns: 1fr; grid-template-rows: minmax(12rem, 1.12fr) minmax(15rem, 1fr); }
+  .patient-stage { grid-template-columns: 1fr; grid-template-rows: minmax(12rem, 1fr) minmax(15rem, 1.1fr); }
   .patient-action-card { flex-direction: row; gap: .85rem; }
   .patient-card-hint { max-width: 34%; }
+  .patient-options { flex-basis: clamp(5.5rem, 13dvh, 8rem); gap: .35rem; margin-top: .5rem; }
+  .patient-options .patient-action-card { padding: .45rem; }
   .patient-tool { padding-inline: .65rem; }
 }
 @media (max-height: 600px) and (orientation: landscape) {
   .patient-action-card { flex-direction: row; }
-  .patient-card-hint { display: none; }
+  .patient-action-card:not([aria-pressed="true"]) .patient-card-hint { display: none; }
   .patient-card-icon { width: 2.2rem; }
 }

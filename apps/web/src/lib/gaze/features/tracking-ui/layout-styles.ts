@@ -34,7 +34,7 @@ export const EyeBreadcrumbsStyles = `
 `
 
 export const EyeStepStyles = `
-  flex h-full min-h-11 w-full items-center justify-center gap-2 rounded-2xl bg-surface px-2 py-2 text-sm font-semibold text-pine-soft [&.active]:bg-pine [&.active]:text-white [&.done]:text-teal
+  flex h-full min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-surface px-2 py-2 text-sm font-semibold text-pine-soft [&.active]:bg-pine [&.active]:text-white [&.done]:text-teal
 `
 
 export const EyeStepNumberStyles = `

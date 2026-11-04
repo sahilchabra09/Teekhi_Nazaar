@@ -1,6 +1,5 @@
 "use client";
 
-import { ChevronLeft, KeyRound, RefreshCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { useDwell } from "./use-dwell";
@@ -17,6 +16,7 @@ export type PanelCard =
       tone: Tone;
       onSelect: () => void;
       disabled?: boolean;
+      pressed?: boolean;
     }
   | {
       kind: "preview";
@@ -31,37 +31,21 @@ export type PanelCard =
       busy?: boolean;
     };
 
-type Props = {
-  heading: string;
-  /** Shown when the panel is in a sub-view; dwell on it to go back. */
-  back?: { label: string; onSelect: () => void };
-  /** Optional second pill, e.g. "New replies" or "Password". */
-  extra?: { label: string; onSelect: () => void; icon?: "refresh" | "settings" };
-  cards: PanelCard[];
-  /** Custom content instead of the three cards (e.g. the appliance grid). */
-  children?: React.ReactNode;
-  home?: boolean;
-};
+export type PanelAction = Extract<PanelCard, { kind: "action" }>;
 
-export function SidePanel({ heading, back, extra, cards, children, home }: Props) {
+export function SidePanel({ heading, cards, showHeading }: {
+  heading: string;
+  cards: PanelCard[];
+  showHeading: boolean;
+}) {
   return (
     <aside className="patient-actions flex min-h-0 min-w-0 flex-col" aria-label="Actions">
-      <div className={home ? "sr-only" : "mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 px-1"}>
-        <h2 className="font-display text-lg leading-tight font-bold text-pine">{heading}</h2>
-        <div className="flex shrink-0 items-center gap-2">
-          {extra && <Pill {...extra} icon={extra.icon ?? "refresh"} />}
-          {back && <Pill {...back} icon="back" />}
-        </div>
+      <h2 className={showHeading ? "mb-2 px-1 font-display text-lg font-bold text-pine" : "sr-only"}>{heading}</h2>
+      <div className="flex min-h-0 flex-1 flex-col gap-2.5 md:gap-3">
+        {cards.map((card) => card.kind === "preview"
+          ? <PreviewCard key={card.key} card={card} />
+          : <ActionCard key={card.key} card={card} />)}
       </div>
-
-      {children ?? (
-        <div className="flex min-h-0 flex-1 flex-col gap-2.5 md:gap-4">
-          {cards.map((c) =>
-            c.kind === "preview" ? <PreviewCard key={c.key} card={c} /> : <ActionCard key={c.key} card={c} />,
-          )}
-        </div>
-      )}
-
     </aside>
   );
 }
@@ -75,13 +59,15 @@ const TONE_CLASS: Record<Tone, string> = {
   plain: "clay text-pine",
 };
 
-function ActionCard({ card }: { card: Extract<PanelCard, { kind: "action" }> }) {
+export function ActionCard({ card }: { card: PanelAction }) {
   const { ref, props } = useDwell<HTMLButtonElement>(card.onSelect, { disabled: card.disabled });
   const Icon = card.icon;
   return (
     <button
       ref={ref}
       {...props}
+      type="button"
+      aria-pressed={card.pressed}
       disabled={card.disabled}
       className={`patient-action-card clay-press relative flex min-h-0 flex-1 basis-0 items-center justify-center overflow-hidden rounded-[1.75rem] text-center ${TONE_CLASS[card.tone]}`}
     >
@@ -136,21 +122,5 @@ function LevelMeter({ level }: { level: number }) {
         />
       ))}
     </div>
-  );
-}
-
-function Pill({ label, onSelect, icon }: { label: string; onSelect: () => void; icon: "back" | "refresh" | "settings" }) {
-  const { ref, props } = useDwell<HTMLButtonElement>(onSelect, { ms: 800 });
-  const Icon = icon === "back" ? ChevronLeft : icon === "settings" ? KeyRound : RefreshCw;
-  return (
-    <button
-      ref={ref}
-      {...props}
-      className="clay-sm clay-press relative flex shrink-0 items-center gap-1 overflow-hidden rounded-full py-2 pr-3.5 pl-2.5 text-sm font-bold text-pine"
-    >
-      <span className="dwell-fill !bg-honey/60" />
-      <Icon className={`relative ${icon === "back" ? "size-4" : "size-3.5"}`} strokeWidth={2.5} />
-      <span className="relative">{label}</span>
-    </button>
   );
 }

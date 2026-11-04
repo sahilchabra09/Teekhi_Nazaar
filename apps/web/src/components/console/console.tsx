@@ -24,7 +24,7 @@ import { ControlSettingsDialog } from "./control-settings";
 import { readSavedMic } from "./mic-picker";
 import { RobotFeed } from "./robot-feed";
 import { ScreenGazeControls, type PatientMode } from "./screen-gaze-controls";
-import { type PanelCard, SidePanel } from "./side-panel";
+import { ActionCard, type PanelAction, type PanelCard, SidePanel } from "./side-panel";
 
 const QUICK_PHRASES = ["Please come here.", "I need some help.", "Could you repeat that?"];
 const TONES = ["teal", "honey", "sky"] as const;
@@ -416,32 +416,29 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
   const home: View = { name: "home" };
   let heading = "What would you like to do?";
-  let back: { label: string; onSelect: () => void } | undefined;
-  let extra: { label: string; onSelect: () => void; icon?: "refresh" | "settings" } | undefined;
+  let options: PanelAction[] = [];
+  const inCommunication = view.name === "communicate" || view.name === "phrases";
+  const phrasesOpen = view.name === "phrases";
+  const communicateCard: PanelAction = {
+    kind: "action", key: "talk", title: "Communicate", icon: MessageSquareText, tone: "honey",
+    pressed: inCommunication,
+    hint: inCommunication ? "Select again for main actions" : "Choose a phrase or listen and reply",
+    onSelect: inCommunication ? goHome : () => setView({ name: "communicate" }),
+  };
+  const driveCard: PanelAction = {
+    kind: "action", key: "drive", title: "Drive", icon: Navigation, tone: "teal",
+    pressed: view.name === "drive",
+    hint: view.name === "drive" ? "Select again for main actions" : hasFeed ? "Open directional controls" : "Connect the phone to drive",
+    onSelect: view.name === "drive" ? goHome : () => setView({ name: "drive" }),
+  };
   let cards: PanelCard[] = [];
   let feedStatus: string | null = null;
 
   switch (view.name) {
     case "home":
       cards = [
-        {
-          kind: "action",
-          key: "drive",
-          title: "Drive",
-          hint: hasFeed ? "Open directional controls" : "Connect the phone to drive",
-          icon: Navigation,
-          tone: "teal",
-          onSelect: () => setView({ name: "drive" }),
-        },
-        {
-          kind: "action",
-          key: "talk",
-          title: "Communicate",
-          hint: "Choose a phrase or listen and reply",
-          icon: MessageSquareText,
-          tone: "honey",
-          onSelect: () => setView({ name: "communicate" }),
-        },
+        driveCard,
+        communicateCard,
         {
           kind: "action",
           key: "appliances",
@@ -456,25 +453,30 @@ export default function Console({ userName, appliancePassword }: { userName: str
 
     case "drive":
       heading = "Drive the car";
-      back = { label: "Actions", onSelect: goHome };
       cards = [
+        driveCard,
         { kind: "preview", key: "drive-help",
           text: !hasFeed ? "Connect the robot phone" : ready || active ? "Look at a direction on the video" : "Waiting for drive access",
           hint: !hasFeed ? "Use Connect phone in the video panel to open the robot camera." :
             driveStatus === "retry-stop" ? "Select Stop again to confirm." :
             ready || active ? "Hold for 0.9 seconds. Look away to stop." : "On the mounted phone, calibrate, authorize the session and enable driving." },
         { kind: "action", key: "stop", title: "Stop driving", icon: Square, tone: "honey", onSelect: () => stop(true), disabled: !connected },
-        { kind: "action", key: "actions", title: "Back to actions", tone: "plain", onSelect: goHome },
       ];
       break;
 
     case "communicate":
-      heading = "Communicate";
-      back = { label: "Actions", onSelect: goHome };
+    case "phrases":
+      heading = phrasesOpen ? "Quick phrases" : "Communicate";
       cards = [
-        { kind: "action", key: "phrases", title: "Quick phrases", hint: "Choose words to speak", icon: MessageSquareText, tone: "honey", onSelect: () => setView({ name: "phrases" }) },
+        { kind: "action", key: "phrases", title: "Quick phrases", pressed: phrasesOpen,
+          hint: phrasesOpen ? "Select again to close phrases" : "Choose words to speak", icon: MessageSquareText, tone: "sky",
+          onSelect: () => setView({ name: phrasesOpen ? "communicate" : "phrases" }) },
+        communicateCard,
         { kind: "action", key: "listen", title: "Listen and reply", hint: "Listen to someone and choose a reply", icon: Ear, tone: "teal", onSelect: () => void startListening() },
       ];
+      if (phrasesOpen) options = QUICK_PHRASES.map((text, i) => ({
+        kind: "action", key: text, title: text, tone: TONES[i]!, onSelect: () => confirm(text, view),
+      }));
       break;
 
     case "listening":
@@ -501,29 +503,16 @@ export default function Console({ userName, appliancePassword }: { userName: str
       heading = "Finding replies…";
       feedStatus = view.heard ? null : "Understanding what they said";
       cards = [{ kind: "preview", key: "thinking", text: view.heard ? "Writing new replies…" : "Understanding what they said…", busy: true }];
-      back = { label: "Cancel", onSelect: goHome };
+      cards.push({ kind: "action", key: "cancel", title: "Cancel request", tone: "honey", onSelect: goHome });
       break;
 
     case "no-speech":
       heading = "Didn’t catch that";
-      back = { label: "Back", onSelect: goHome };
       cards = [
         { kind: "action", key: "again", title: "Listen again", icon: Ear, tone: "teal", onSelect: () => void startListening() },
         { kind: "action", key: "phrases", title: "Quick phrases", icon: MessageSquareText, tone: "honey", onSelect: () => setView({ name: "phrases" }) },
-        { kind: "action", key: "home", title: "Go back", icon: X, tone: "plain", onSelect: goHome },
+        { kind: "action", key: "home", title: "Finish conversation", tone: "honey", onSelect: goHome },
       ];
-      break;
-
-    case "phrases":
-      heading = "Quick phrases";
-      back = { label: "Back", onSelect: () => setView(home) };
-      cards = QUICK_PHRASES.map((p, i) => ({
-        kind: "action",
-        key: p,
-        title: p,
-        tone: TONES[i]!,
-        onSelect: () => confirm(p, view),
-      }));
       break;
 
     case "appliances":
@@ -565,9 +554,9 @@ export default function Console({ userName, appliancePassword }: { userName: str
         ];
         break;
       }
-      heading = view.lowConfidence ? "Not sure I heard right" : "Pick a reply";
-      back = { label: "Ignore", onSelect: goHome };
-      if (fromTalk) extra = { label: "New replies", onSelect: () => void moreReplies(view.heard) };
+      heading = "Pick a reply";
+      options = [{ kind: "action", key: "ignore", title: "Ignore", tone: "plain", onSelect: goHome }];
+      if (fromTalk) options.push({ kind: "action", key: "more", title: "New replies", tone: "honey", onSelect: () => void moreReplies(view.heard) });
       cards = view.replies.map((r, i) => ({
         kind: "action",
         key: r,
@@ -616,6 +605,7 @@ export default function Console({ userName, appliancePassword }: { userName: str
           className="patient-tool"><span className="dwell-fill" /><LogOut aria-hidden className="relative size-5" /><span className="relative">Sign out</span></button>
       </header>
       <section aria-label={mode === "live" ? "Gaze control overlay" : "Patient controls"} className="patient-stage">
+        <div className="patient-media">
           <RobotFeed
             stream={connection.media.remote}
             localCamera={connection.camera}
@@ -635,13 +625,14 @@ export default function Console({ userName, appliancePassword }: { userName: str
             menu={<ConnectionBar connection={connection} />}
           />
 
-        <SidePanel
-          heading={heading}
-          back={back}
-          extra={extra}
-          cards={cards}
-          home={view.name === "home"}
-        />
+          {options.length > 0 && (
+            <div role="group" aria-label={phrasesOpen ? "Phrase choices" : "Reply options"} className="patient-options">
+              {options.map(card => <ActionCard key={card.key} card={card} />)}
+            </div>
+          )}
+        </div>
+        <SidePanel heading={heading} cards={cards}
+          showHeading={view.name !== "home" && view.name !== "drive" && !inCommunication} />
       </section>
       <ControlSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)}
         micId={micId} onMicChange={setMicId} micListVersion={micListVersion} connection={connection} />

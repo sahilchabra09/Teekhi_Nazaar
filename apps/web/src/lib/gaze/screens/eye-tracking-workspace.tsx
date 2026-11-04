@@ -65,7 +65,7 @@ import { ThresholdControls } from "@/lib/gaze/features/eye-tracking/threshold-co
 import { useCalibratedGaze } from "@/lib/gaze/features/eye-tracking/use-calibrated-gaze"
 import { useGazeAdjustment } from "@/lib/gaze/features/eye-tracking/use-gaze-adjustment"
 import { useTracker } from "@/lib/gaze/features/eye-tracking/use-tracker"
-import { ArrowLeft, ArrowRight, Eye, ScanEye } from "lucide-react"
+import { ArrowRight, Eye, ScanEye } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   EyeAppStyles,
@@ -910,20 +910,11 @@ export function EyeTrackingWorkspace({
                 onExport={exportResult}
               />
             )}
-            {(step > 0 || source) && (
+            {step <= 3 && (step > 0 || source) && (
               <footer
                 className={`eye-bottom-bar ${EyeBottomBarStyles} ${step === 2 ? "has-model-status" : ""}`}
               >
                 <div>
-                  {step > 0 && (
-                    <button
-                      className={`eye-button ${EyeButtonStyles} secondary`}
-                      onClick={() => setStep(step - 1)}
-                    >
-                      <ArrowLeft size={15} />
-                      Back
-                    </button>
-                  )}
                   {step === 2 && (
                     <span
                       className={`eye-model-lock-status ${EyeModelLockStatusStyles}`}
@@ -944,27 +935,25 @@ export function EyeTrackingWorkspace({
                       {modelLockStatus.blocker === "ready" && "Model ready"}
                     </span>
                   )}
-                  {step <= 3 && (
-                    <button
-                      className={`eye-button ${EyeButtonStyles} primary`}
-                      disabled={continueDisabled}
-                      aria-describedby={
-                        step === 2 ? "eye-model-lock-status" : undefined
+                  <button
+                    className={`eye-button ${EyeButtonStyles} primary`}
+                    disabled={continueDisabled}
+                    aria-describedby={
+                      step === 2 ? "eye-model-lock-status" : undefined
+                    }
+                    onClick={() => {
+                      if (step === 1) {
+                        setRegionStepComplete(true)
                       }
-                      onClick={() => {
-                        if (step === 1) {
-                          setRegionStepComplete(true)
-                        }
-                        if (step === 2) {
-                          configure({ locked: true }, false)
-                        }
-                        setStep((s) => s + 1)
-                      }}
-                    >
-                      {step === 2 ? "Lock model" : "Continue"}
-                      <ArrowRight size={16} />
-                    </button>
-                  )}
+                      if (step === 2) {
+                        configure({ locked: true }, false)
+                      }
+                      setStep((s) => s + 1)
+                    }}
+                  >
+                    {step === 2 ? "Lock model" : "Continue"}
+                    <ArrowRight size={16} />
+                  </button>
                 </div>
               </footer>
             )}
