@@ -5,23 +5,26 @@
 #include <PubSubClient.h>
 
 #include "command.h"
+#include "setup_page.h"
+#include "local_credentials.h"
 
 namespace {
 
-constexpr uint8_t outputPins[] = {D1, D2, D5};
+constexpr uint8_t outputPins[] = {D0, D2, D5};
 static_assert(sizeof(outputPins) / sizeof(outputPins[0]) == appliances::channelCount);
 constexpr uint8_t setupPin = D6;
 constexpr char controlTopic[] = "gazeconnect/appliances/control";
 constexpr char stateTopic[] = "gazeconnect/appliances/state";
+constexpr char brokerHost[] = "broker.emqx.io";
+constexpr uint16_t brokerPort = 1883;
+static_assert(sizeof(appliancePassword) > 1, "Set the appliance control password in local_credentials.h");
+static_assert(sizeof(setupPassword) >= 9 && sizeof(setupPassword) <= 64, "Set an 8-63 byte setup Wi-Fi password");
 constexpr uint32_t settingsVersion = 0x49525301;
 
 struct Settings {
     uint32_t version;
     char ssid[33];
     char wifiKey[64];
-    char controlKey[64];
-    char brokerHost[128];
-    uint16_t brokerPort;
 };
 
 Settings settings{};
@@ -32,9 +35,7 @@ bool provisioning = false;
 
 bool settingsValid(const Settings& s) {
     return s.version == settingsVersion && s.ssid[0] && s.ssid[sizeof(s.ssid) - 1] == 0 &&
-           s.wifiKey[sizeof(s.wifiKey) - 1] == 0 && s.controlKey[sizeof(s.controlKey) - 1] == 0 &&
-           strlen(s.controlKey) >= 8 && s.brokerHost[0] && s.brokerHost[sizeof(s.brokerHost) - 1] == 0 &&
-           s.brokerPort > 0;
+           s.wifiKey[sizeof(s.wifiKey) - 1] == 0;
 }
 
 template<size_t N>
@@ -47,58 +48,65 @@ bool readField(const char* key, char (&out)[N], size_t minLength = 0) {
     return true;
 }
 
+void scanNetworks() {
+    const int count = WiFi.scanNetworks();
+    if (count < 0) {
+        portal.send(503, "application/json", "{\"message\":\"Scan failed. Try again.\"}");
+        return;
+    }
+    JsonDocument result;
+    JsonArray networks = result.to<JsonArray>();
+    for (int i = 0; i < count; ++i) {
+        JsonObject network = networks.add<JsonObject>();
+        network["ssid"] = WiFi.SSID(i);
+        network["rssi"] = WiFi.RSSI(i);
+    }
+    WiFi.scanDelete();
+    String body;
+    serializeJson(result, body);
+    portal.send(200, "application/json", body);
+}
+
 void saveSettings() {
     Settings next{};
     next.version = settingsVersion;
-    const String port = portal.arg("port");
-    char* end;
-    const long number = strtol(port.c_str(), &end, 10);
     if (!readField("ssid", next.ssid, 1) || !readField("wifi", next.wifiKey) ||
-        (next.wifiKey[0] && strlen(next.wifiKey) < 8) || !readField("control", next.controlKey, 8) ||
-        !readField("host", next.brokerHost, 1) || strspn(next.brokerHost,
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-") != strlen(next.brokerHost) ||
-        number < 1 || number > 65535 || *end != '\0') {
-        portal.send(400, "text/plain", "Check the field lengths, broker hostname and TCP port.");
+        (next.wifiKey[0] && strlen(next.wifiKey) < 8)) {
+        portal.send(400, "application/json", R"({"message":"Enter a network name and its Wi-Fi password (8–63 bytes), or leave it blank for open Wi-Fi."})");
         return;
     }
-    next.brokerPort = static_cast<uint16_t>(number);
+    WiFi.begin(next.ssid, next.wifiKey);
+    if (WiFi.waitForConnectResult(15000) != WL_CONNECTED || WiFi.SSID() != next.ssid) {
+        WiFi.disconnect(false);
+        portal.send(422, "application/json", R"({"message":"Could not join that network. Check the Wi-Fi password and that 2.4 GHz is enabled, then retry."})");
+        return;
+    }
     EEPROM.put(0, next);
     if (!EEPROM.commit()) {
-        portal.send(500, "text/plain", "Could not save settings. Retry.");
+        portal.send(500, "application/json", R"({"message":"Could not save the network. Try again."})");
         return;
     }
-    portal.send(200, "text/plain", "Saved. Release the setup button. Restarting in two seconds.");
-    delay(2000);
+    portal.send(200, "application/json", R"({"success":true})");
+    delay(1000);
     ESP.restart();
 }
 
-const char setupPage[] PROGMEM = R"HTML(<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>IRIS appliance setup</title>
-<h1>IRIS appliance board</h1><form method="post" action="/settings" autocomplete="off">
-<p><label>2.4 GHz Wi-Fi network <input name="ssid" required maxlength="32"></label>
-<p><label>Wi-Fi password (blank for an open network) <input type="password" name="wifi" maxlength="63"></label>
-<p><label>MQTT broker hostname or IPv4 address <input name="host" required maxlength="127"></label>
-<p><label>MQTT TCP port <input type="number" name="port" required min="1" max="65535" value="1883"></label>
-<p><label>Appliance control password <input type="password" name="control" required minlength="8" maxlength="63"></label>
-<p>Use a dedicated appliance password. Broker subscribers can read control messages.</p>
-<button>Save and restart</button></form></html>)HTML";
-
 void startSetup() {
     provisioning = true;
-    WiFi.mode(WIFI_AP);
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false);
     const String name = "IRIS-Appliances-" + String(ESP.getChipId(), HEX);
-    // Only this short-lived setup key is disclosed locally over USB.
-    char key[17]{};
-    for (size_t i = 0; i < sizeof(key) - 1; ++i) key[i] = "0123456789abcdef"[secureRandom(16)];
-    if (!WiFi.softAP(name.c_str(), key)) {
+    if (!WiFi.softAP(name.c_str(), setupPassword)) {
         Serial.println(F("Setup Wi-Fi failed. Reset the board to retry."));
         return;
     }
-    Serial.printf("Setup Wi-Fi: %s\nTemporary setup key: %s\n", name.c_str(), key);
+    Serial.printf("Setup Wi-Fi: %s\n", name.c_str());
     Serial.print(F("Open http://"));
     Serial.println(WiFi.softAPIP());
     portal.on("/", HTTP_GET, [] { portal.send_P(200, PSTR("text/html"), setupPage); });
-    portal.on("/settings", HTTP_POST, saveSettings);
+    portal.on("/scan", HTTP_GET, scanNetworks);
+    portal.on("/connect", HTTP_POST, saveSettings);
     portal.begin();
 }
 
@@ -115,7 +123,7 @@ bool publishState() {
 void handleCommand(char* topic, uint8_t* payload, unsigned int length) {
     appliances::Command command{};
     if (strcmp(topic, controlTopic) != 0 ||
-        !appliances::parseCommand(payload, length, settings.controlKey, command)) return;
+        !appliances::parseCommand(payload, length, appliancePassword, command)) return;
 
     for (size_t i = 0; i < appliances::channelCount; ++i) {
         if (command[i] != appliances::Switch::unchanged) {
@@ -166,7 +174,7 @@ void setup() {
         startSetup();
         return;
     }
-    mqtt.setServer(settings.brokerHost, settings.brokerPort);
+    mqtt.setServer(brokerHost, brokerPort);
     mqtt.setCallback(handleCommand);
 }
 

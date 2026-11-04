@@ -6,7 +6,7 @@ A second ESP8266 runs three active-high outputs for the IRIS console’s applian
 
 | Console / MQTT | NodeMCU label | ESP8266 pin | Function |
 | --- | --- | --- | --- |
-| `d1` | D1 | GPIO5 | Appliance 1 driver input |
+| `d1` | **D0** | **GPIO16** | Appliance 1 driver input |
 | `d2` | D2 | GPIO4 | Appliance 2 driver input |
 | `d3` | **D5** | **GPIO14** | Appliance 3 driver input |
 | Setup | D6 | GPIO12 | Optional momentary switch to GND, sampled at boot |
@@ -16,6 +16,8 @@ Use 3.3 V-compatible active-high driver inputs, a common signal ground, and an e
 The logical `d3` channel uses physical **D5**, so move its signal wire if it was connected to D3. Leave the boot-strap pins at their normal reset levels (D3/GPIO0 high, D4/GPIO2 high, D8/GPIO15 low).
 
 ## Build
+
+Copy `iot/src/local_credentials.h.example` to `iot/src/local_credentials.h`. Set `setupPassword` to the setup network’s 8–63 byte passphrase and `appliancePassword` to the control password. Set `APPLIANCE_CONTROL_PASSWORD` to the same control value in `apps/web/.env.local` or the web server environment. Git ignores both local files.
 
 From the repository root, select one PlatformIO environment.
 
@@ -31,12 +33,12 @@ To install, select the appliance board’s USB port and add `-t upload --upload-
 
 ## Provision
 
-1. Open the USB serial monitor at 115200 baud and reset the board. A new board starts setup automatically. To change saved settings, hold D6 to GND while resetting, then release D6. A failed Wi-Fi connection during boot also opens setup.
-2. Join the `IRIS-Appliances-…` Wi-Fi network using the temporary key shown on USB. Open `http://192.168.4.1/`. The setup key changes each time setup starts.
-3. Enter the 2.4 GHz Wi-Fi network and passphrase (blank for open Wi-Fi), MQTT TCP host and port, and a dedicated 8–63 byte appliance control password. Save to restart. Saved credentials stay in the board’s flash. The form does not display them.
-4. Set the same appliance control password in the web console. The board and `NEXT_PUBLIC_MQTT_BROKER_URL` must point to the same broker, using its respective TCP and WebSocket listeners.
+1. Join the board’s `IRIS-Appliances-…` setup network with the configured setup passphrase. A new board opens setup automatically. To change saved Wi-Fi, hold D6 to GND while resetting and then release it.
+2. Open `http://192.168.4.1/`, select your 2.4 GHz network (or enter its name manually), and enter its Wi-Fi password. Leave the password blank for open Wi-Fi.
+3. Select **Save network and connect**. The board keeps the portal open while checking the connection. A successful connection saves the Wi-Fi settings and restarts the board. Existing appliance Wi-Fi credentials are read from the same flash layout on upgrade.
+4. Rejoin your usual network and open **Appliances** in the console. The firmware connects to `broker.emqx.io:1883` and accepts the configured appliance password. The web server supplies this value to the console. No appliance password entry is needed.
 
-The board uses plain MQTT TCP (typically port 1883) without broker login. Use an access-controlled local network and broker for real devices. To match the console’s public demo endpoint, enter `broker.emqx.io` and `1883`. Anyone on that public topic can read the appliance password, replay commands, or publish state. Use a throwaway password and disconnected loads for public tests.
+The console defaults to the same broker’s WebSocket listener. For a custom deployment, keep the firmware broker and credential constants in sync with the web app’s `NEXT_PUBLIC_MQTT_BROKER_URL` and `APPLIANCE_CONTROL_PASSWORD`. These demo commands are visible to subscribers on the public broker.
 
 ## MQTT contract
 
@@ -48,7 +50,7 @@ The board uses plain MQTT TCP (typically port 1883) without broker login. Use an
 A command accepts one or more channels. A wrong password, unknown channel or unsupported value rejects the whole command. Use lowercase `on` or `off` (`high` and `low` are also accepted).
 
 ```json
-{"password":"<dedicated appliance password>","pins":{"d1":"on","d3":"off"}}
+{"password":"<appliance password>","pins":{"d1":"on","d3":"off"}}
 ```
 
 The board reports all three GPIO levels after connecting and after each accepted command. A retained report is the last observation and can outlive the board’s connection.
